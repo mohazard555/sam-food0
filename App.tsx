@@ -225,20 +225,20 @@ const GenerateRecipeAIView: React.FC<{
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `Generate a recipe based on this description: "${prompt}". Provide a suitable name, category, a list of ingredients, and the preparation steps.`,
+                contents: `بناءً على الوصف التالي: "${prompt}"، قم بإنشاء وصفة طعام. يجب أن تكون الإجابة بتنسيق JSON حصريًا، وتتضمن الحقول التالية باللغة العربية: name (اسم الوصفة)، category (التصنيف)، ingredients (قائمة بالمكونات كنصوص)، و steps (خطوات التحضير كنص واحد).`,
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: {
                         type: Type.OBJECT,
                         properties: {
-                            name: { type: Type.STRING, description: "The name of the recipe in Arabic." },
-                            category: { type: Type.STRING, description: "The category of the recipe in Arabic (e.g., Main Dishes, Desserts)." },
+                            name: { type: Type.STRING, description: "اسم الوصفة باللغة العربية." },
+                            category: { type: Type.STRING, description: "تصنيف الوصفة باللغة العربية (مثال: أطباق رئيسية، حلويات)." },
                             ingredients: {
                                 type: Type.ARRAY,
                                 items: { type: Type.STRING },
-                                description: "An array of strings, where each string is one ingredient in Arabic."
+                                description: "مصفوفة من النصوص، كل نص يمثل مكونًا واحدًا باللغة العربية."
                             },
-                            steps: { type: Type.STRING, description: "The preparation steps, formatted as a single string with newlines, in Arabic." }
+                            steps: { type: Type.STRING, description: "خطوات التحضير، منسقة كنص واحد مع فواصل أسطر، باللغة العربية." }
                         },
                         required: ["name", "category", "ingredients", "steps"]
                     }
