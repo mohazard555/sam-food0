@@ -52,6 +52,7 @@ const initialSettings: Settings = {
     siteDescription: 'مرحبًا بكم في استوديو الوصفات! هذه المنصة مصممة لتكون مساحتكم الخاصة لإدارة ومشاركة وصفات الطبخ بكل سهولة والمتعة. هدفنا هو توفير أداة بسيطة وفعالة تتيح لكم إضافة وصفاتكم المفضلة، تصفحها، وتعديلها في أي وقت، وكل ذلك يتم تخزينه بأمان على جهازكم الخاص دون الحاجة لاتصال بالإنترنت أو خوادم خارجية.',
     siteLogo: '', // Default empty, user can upload
     youtubeSubscribeLink: '',
+    gistUrl: '', // For online sync
 };
 
 const initialAdminCredentials: AdminCredentials = {
@@ -404,6 +405,11 @@ const SettingsView: React.FC<{
     const [localCreds, setLocalCreds] = useState(credentials);
     const [logoPreview, setLogoPreview] = useState(settings.siteLogo);
 
+    useEffect(() => {
+        setLocalSettings(settings);
+        setLogoPreview(settings.siteLogo);
+    }, [settings]);
+
     const handleLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
@@ -449,6 +455,11 @@ const SettingsView: React.FC<{
                         <div>
                             <label htmlFor="youtubeLink" className="block text-sm font-medium text-gray-700">رابط قناة يوتيوب للاشتراك</label>
                             <input type="url" id="youtubeLink" value={localSettings.youtubeSubscribeLink} onChange={e => setLocalSettings({...localSettings, youtubeSubscribeLink: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://www.youtube.com/channel/..."/>
+                        </div>
+                         <div>
+                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist للمزامنة</label>
+                            <input type="url" id="gistUrl" value={localSettings.gistUrl} onChange={e => setLocalSettings({...localSettings, gistUrl: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://gist.githubusercontent.com/.../raw/..."/>
+                            <p className="mt-1 text-xs text-gray-500">ضع رابط Gist "Raw" هنا لمزامنة البيانات عبر الإنترنت. اتركه فارغًا لاستخدام الوضع المحلي.</p>
                         </div>
                         <div>
                             <label htmlFor="siteLogo" className="block text-sm font-medium text-gray-700">شعار الموقع</label>
@@ -529,9 +540,9 @@ const CategoryFilter: React.FC<{
 // --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
     // --- STATE MANAGEMENT ---
-    const [recipes, setRecipes] = useLocalStorage<Recipe[]>('recipes', initialRecipes);
-    const [ads, setAds] = useLocalStorage<Ad[]>('ads', initialAds);
-    const [settings, setSettings] = useLocalStorage<Settings>('settings', initialSettings);
+    const [recipes, setRecipes] = useState<Recipe[]>([]);
+    const [ads, setAds] = useState<Ad[]>([]);
+    const [settings, setSettings] = useState<Settings>(initialSettings);
     const [adminCredentials, setAdminCredentials] = useLocalStorage<AdminCredentials>('adminCredentials', initialAdminCredentials);
     
     const [view, setView] = useState<View>('home');
@@ -539,23 +550,76 @@ const App: React.FC = () => {
     const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
     const [selectedCategory, setSelectedCategory] = useState<string>('الكل');
     const [isSubscribed, setIsSubscribed] = useLocalStorage<boolean>('ytSubscribed', false);
+    
+    const [isLoading, setIsLoading] = useState(true);
+    const [fetchError, setFetchError] = useState<string | null>(null);
+
+    // --- DATA LOADING & SAVING ---
+    useEffect(() => {
+        const loadData = async () => {
+            setIsLoading(true);
+            setFetchError(null);
+            
+            const localSettingsRaw = localStorage.getItem('settings');
+            const localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : initialSettings;
+            const gistUrl = localSettings.gistUrl;
+
+            if (gistUrl && gistUrl.startsWith('http')) {
+                // Online mode: Fetch from Gist, don't use localStorage for data (except credentials)
+                try {
+                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`); // Cache-busting
+                    if (!response.ok) {
+                        throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
+                    }
+                    const data = await response.json();
+                    
+                    setRecipes(data.recipes || []);
+                    setAds(data.ads || []);
+                    setSettings(data.settings || initialSettings);
+                } catch (error) {
+                    console.error("Fetch error:", error);
+                    setFetchError("فشل تحميل البيانات من الرابط. يرجى التأكد من صحة الرابط أو المحاولة لاحقاً.");
+                }
+            } else {
+                // Offline mode: Load from localStorage
+                const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
+                const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
+                setRecipes(localRecipes);
+                setAds(localAds);
+                setSettings(localSettings);
+            }
+            setIsLoading(false);
+        };
+        loadData();
+    }, []);
+
+    const saveDataToLocal = (data: { recipes?: Recipe[]; ads?: Ad[]; settings?: Settings }) => {
+        if (data.recipes) localStorage.setItem('recipes', JSON.stringify(data.recipes));
+        if (data.ads) localStorage.setItem('ads', JSON.stringify(data.ads));
+        if (data.settings) localStorage.setItem('settings', JSON.stringify(data.settings));
+    };
 
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
     const handleSaveRecipe = (recipeData: Omit<Recipe, 'id'>, id?: string) => {
+        let updatedRecipes;
         if (id) {
-            setRecipes(prev => prev.map(r => r.id === id ? { ...r, ...recipeData } : r));
+            updatedRecipes = recipes.map(r => r.id === id ? { ...r, ...recipeData } : r);
         } else {
             const newRecipe: Recipe = { id: Date.now().toString(), ...recipeData };
-            setRecipes(prev => [newRecipe, ...prev]);
+            updatedRecipes = [newRecipe, ...recipes];
         }
+        setRecipes(updatedRecipes);
+        saveDataToLocal({ recipes: updatedRecipes });
         setModalState(null);
     };
 
     const handleDeleteRecipe = (id: string) => {
         if (window.confirm('هل أنت متأكد من حذف هذه الوصفة؟')) {
-            setRecipes(prev => prev.filter(r => r.id !== id));
+            const updatedRecipes = recipes.filter(r => r.id !== id);
+            setRecipes(updatedRecipes);
+            saveDataToLocal({ recipes: updatedRecipes });
         }
     };
     
@@ -589,17 +653,28 @@ const App: React.FC = () => {
 
     // ADS
     const handleSaveAd = (adData: Omit<Ad, 'id'>, id?: string) => {
+        let updatedAds;
         if (id) {
-            setAds(prev => prev.map(a => a.id === id ? { ...a, ...adData } : a));
+            updatedAds = ads.map(a => a.id === id ? { ...a, ...adData } : a);
         } else {
             const newAd: Ad = { id: Date.now().toString(), ...adData };
-            setAds(prev => [newAd, ...prev]);
+            updatedAds = [newAd, ...ads];
         }
+        setAds(updatedAds);
+        saveDataToLocal({ ads: updatedAds });
         setModalState(null);
     };
 
     const handleDeleteAd = (id: string) => {
-        setAds(prev => prev.filter(a => a.id !== id));
+        const updatedAds = ads.filter(a => a.id !== id);
+        setAds(updatedAds);
+        saveDataToLocal({ ads: updatedAds });
+    };
+
+    // SETTINGS
+    const handleSaveSettings = (newSettings: Settings) => {
+        setSettings(newSettings);
+        saveDataToLocal({ settings: newSettings });
     };
 
     // AUTHENTICATION
@@ -648,14 +723,19 @@ const App: React.FC = () => {
         reader.onload = (event) => {
             try {
                 const data = JSON.parse(event.target?.result as string);
-                if (data.recipes) setRecipes(data.recipes);
-                if (data.ads) setAds(data.ads);
-                if (data.settings) setSettings(data.settings);
+                const dataToSave: { recipes?: Recipe[], ads?: Ad[], settings?: Settings } = {};
+
+                if (data.recipes) { setRecipes(data.recipes); dataToSave.recipes = data.recipes; }
+                if (data.ads) { setAds(data.ads); dataToSave.ads = data.ads; }
+                if (data.settings) { setSettings(data.settings); dataToSave.settings = data.settings; }
                 if (data.adminCredentials) setAdminCredentials(data.adminCredentials);
-                alert("تم استيراد البيانات بنجاح! سيتم إعادة تحميل الصفحة.");
-                window.location.reload();
+
+                saveDataToLocal(dataToSave);
+                alert("تم استيراد البيانات بنجاح!");
             } catch (error) {
                 alert("حدث خطأ أثناء قراءة الملف. تأكد من أنه ملف تصدير صحيح.");
+            } finally {
+                 e.target.value = ''; // Reset file input
             }
         };
         reader.readAsText(file);
@@ -725,62 +805,77 @@ const App: React.FC = () => {
             />
 
             <main>
-                {view === 'home' && (
-                    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                        <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
-                            <h2 className="text-3xl font-bold text-gray-800">أحدث الوصفات</h2>
-                            {isLoggedIn && (
-                                <button onClick={() => setModalState({ type: 'addRecipe' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
-                                    <PlusIcon className="w-5 h-5 me-2"/>
-                                    إضافة وصفة
-                                </button>
-                            )}
-                        </div>
-                        <CategoryFilter recipes={recipes} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
-                        {filteredRecipes.length > 0 ? (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                                {filteredRecipes.map(recipe => (
-                                    <RecipeCard 
-                                        key={recipe.id} 
-                                        recipe={recipe} 
-                                        isAdmin={isLoggedIn}
-                                        onView={() => {
-                                            if (isLoggedIn || isSubscribed) {
-                                                setModalState({ type: 'viewRecipe', recipe });
-                                            } else if (settings.youtubeSubscribeLink) {
-                                                setModalState({ type: 'subscribeToView', recipe });
-                                            } else {
-                                                setModalState({ type: 'viewRecipe', recipe });
-                                            }
-                                        }}
-                                        onEdit={() => setModalState({ type: 'editRecipe', recipe })}
-                                        onDelete={() => handleDeleteRecipe(recipe.id)}
-                                    />
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-16 bg-white rounded-lg shadow">
-                                <p className="text-gray-500">لا توجد وصفات في هذا القسم. لم لا تضيف واحدة؟</p>
-                            </div>
-                        )}
-                        
-                        <div className="mt-12">
-                             <h2 className="text-3xl font-bold text-gray-800 mb-6">إعلانات ترويجية</h2>
-                             {ads.length > 0 ? (
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                    {ads.map(ad => <AdCard key={ad.id} ad={ad} />)}
-                                </div>
-                             ) : (
-                                <div className="text-center py-10 bg-white rounded-lg shadow">
-                                    {isLoggedIn ? <p className="text-gray-500">لا توجد إعلانات. يمكنك إضافة إعلان من صفحة إدارة الإعلانات.</p> : <p className="text-gray-500">لا توجد إعلانات لعرضها.</p>}
-                                </div>
-                             )}
+                {isLoading ? (
+                    <div className="text-center py-20">
+                         <p className="text-gray-600">جاري تحميل البيانات...</p>
+                    </div>
+                ) : fetchError ? (
+                    <div className="container mx-auto px-4 py-10">
+                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md text-center">
+                            <strong className="font-bold">حدث خطأ!</strong>
+                            <p>{fetchError}</p>
                         </div>
                     </div>
+                ) : (
+                    <>
+                        {view === 'home' && (
+                            <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                                <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
+                                    <h2 className="text-3xl font-bold text-gray-800">أحدث الوصفات</h2>
+                                    {isLoggedIn && (
+                                        <button onClick={() => setModalState({ type: 'addRecipe' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
+                                            <PlusIcon className="w-5 h-5 me-2"/>
+                                            إضافة وصفة
+                                        </button>
+                                    )}
+                                </div>
+                                <CategoryFilter recipes={recipes} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
+                                {filteredRecipes.length > 0 ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                                        {filteredRecipes.map(recipe => (
+                                            <RecipeCard 
+                                                key={recipe.id} 
+                                                recipe={recipe} 
+                                                isAdmin={isLoggedIn}
+                                                onView={() => {
+                                                    if (isLoggedIn || isSubscribed) {
+                                                        setModalState({ type: 'viewRecipe', recipe });
+                                                    } else if (settings.youtubeSubscribeLink) {
+                                                        setModalState({ type: 'subscribeToView', recipe });
+                                                    } else {
+                                                        setModalState({ type: 'viewRecipe', recipe });
+                                                    }
+                                                }}
+                                                onEdit={() => setModalState({ type: 'editRecipe', recipe })}
+                                                onDelete={() => handleDeleteRecipe(recipe.id)}
+                                            />
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-16 bg-white rounded-lg shadow">
+                                        <p className="text-gray-500">لا توجد وصفات في هذا القسم.</p>
+                                    </div>
+                                )}
+                                
+                                <div className="mt-12">
+                                     <h2 className="text-3xl font-bold text-gray-800 mb-6">إعلانات ترويجية</h2>
+                                     {ads.length > 0 ? (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {ads.map(ad => <AdCard key={ad.id} ad={ad} />)}
+                                        </div>
+                                     ) : (
+                                        <div className="text-center py-10 bg-white rounded-lg shadow">
+                                            {isLoggedIn ? <p className="text-gray-500">لا توجد إعلانات. يمكنك إضافة إعلان من صفحة إدارة الإعلانات.</p> : <p className="text-gray-500">لا توجد إعلانات لعرضها.</p>}
+                                        </div>
+                                     )}
+                                </div>
+                            </div>
+                        )}
+                        {view === 'manageAds' && isLoggedIn && <ManageAdsView ads={ads} setModalState={setModalState} deleteAd={handleDeleteAd} />}
+                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
+                        {view === 'about' && <AboutView description={settings.siteDescription}/>}
+                    </>
                 )}
-                {view === 'manageAds' && isLoggedIn && <ManageAdsView ads={ads} setModalState={setModalState} deleteAd={handleDeleteAd} />}
-                {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} onSettingsSave={setSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
-                {view === 'about' && <AboutView description={settings.siteDescription}/>}
             </main>
             
             <Modal isOpen={!!modalState} onClose={() => setModalState(null)} title={modalTitle}>

@@ -28,12 +28,18 @@
           padding: 1rem;
           margin: 0;
         }
+        .printable-area img {
+            height: 400px !important;
+            width: 100% !important;
+            object-fit: cover !important;
+            border-radius: 0 !important;
+            page-break-inside: avoid;
+        }
         .no-print {
           display: none !important;
         }
         img {
             max-width: 100% !important;
-            border-radius: 0 !important;
         }
       }
     </style>
