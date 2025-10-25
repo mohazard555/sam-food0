@@ -21,7 +21,8 @@ export interface Settings {
   siteDescription: string;
   siteLogo: string; // Base64 encoded image
   youtubeSubscribeLink: string;
-  gistUrl: string; // New field for online data sync
+  gistUrl: string; 
+  githubPat: string; // New field for online data sync PAT
 }
 
 export interface AdminCredentials {

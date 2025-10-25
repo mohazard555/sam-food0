@@ -52,7 +52,8 @@ const initialSettings: Settings = {
     siteDescription: 'مرحبًا بكم في استوديو الوصفات! هذه المنصة مصممة لتكون مساحتكم الخاصة لإدارة ومشاركة وصفات الطبخ بكل سهولة والمتعة. هدفنا هو توفير أداة بسيطة وفعالة تتيح لكم إضافة وصفاتكم المفضلة، تصفحها، وتعديلها في أي وقت، وكل ذلك يتم تخزينه بأمان على جهازكم الخاص دون الحاجة لاتصال بالإنترنت أو خوادم خارجية.',
     siteLogo: '', // Default empty, user can upload
     youtubeSubscribeLink: '',
-    gistUrl: '', // For online sync
+    gistUrl: '',
+    githubPat: '', // New field for PAT
 };
 
 const initialAdminCredentials: AdminCredentials = {
@@ -395,7 +396,7 @@ const AboutView: React.FC<{description: string}> = ({ description }) => (
 const SettingsView: React.FC<{
     settings: Settings;
     credentials: AdminCredentials;
-    onSettingsSave: (newSettings: Settings) => void;
+    onSettingsSave: (newSettings: Settings) => Promise<void>;
     onCredentialsSave: (newCreds: AdminCredentials) => void;
     onExport: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -419,10 +420,10 @@ const SettingsView: React.FC<{
         }
     };
 
-    const handleSettingsSave = (e: React.FormEvent) => {
+    const handleSettingsSave = async (e: React.FormEvent) => {
         e.preventDefault();
-        onSettingsSave(localSettings);
-        alert('تم حفظ إعدادات الموقع!');
+        await onSettingsSave(localSettings);
+        alert('تم حفظ إعدادات الموقع ومزامنتها!');
     };
 
      const handleCredentialsSave = (e: React.FormEvent) => {
@@ -442,7 +443,7 @@ const SettingsView: React.FC<{
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Site Settings */}
                 <div className="bg-white p-6 rounded-lg shadow">
-                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b pb-2">إعدادات الموقع</h3>
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b pb-2">إعدادات الموقع والمزامنة</h3>
                     <form onSubmit={handleSettingsSave} className="space-y-4">
                         <div>
                             <label htmlFor="siteName" className="block text-sm font-medium text-gray-700">اسم الموقع</label>
@@ -456,10 +457,20 @@ const SettingsView: React.FC<{
                             <label htmlFor="youtubeLink" className="block text-sm font-medium text-gray-700">رابط قناة يوتيوب للاشتراك</label>
                             <input type="url" id="youtubeLink" value={localSettings.youtubeSubscribeLink} onChange={e => setLocalSettings({...localSettings, youtubeSubscribeLink: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://www.youtube.com/channel/..."/>
                         </div>
-                         <div>
-                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist للمزامنة</label>
-                            <input type="url" id="gistUrl" value={localSettings.gistUrl} onChange={e => setLocalSettings({...localSettings, gistUrl: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://gist.githubusercontent.com/.../raw/..."/>
-                            <p className="mt-1 text-xs text-gray-500">ضع رابط Gist "Raw" هنا لمزامنة البيانات عبر الإنترنت. اتركه فارغًا لاستخدام الوضع المحلي.</p>
+                         <div className="border-t pt-4 space-y-4">
+                             <p className="text-sm text-gray-600">
+                                <b>للمزامنة عبر الإنترنت:</b><br/>
+                                1. أنشئ <b>Secret Gist</b> على GitHub.<br/>
+                                2. يجب أن يحتوي على ملف واحد فقط باسم <code>recipe-studio-data.json</code>.<br/>
+                                3. انسخ رابط <b>"Raw"</b> للملف والصقه في الحقل الأول.<br/>
+                                4. أنشئ <b>Personal Access Token (Classic)</b> من إعدادات GitHub مع صلاحية <b>`gist`</b> فقط.<br/>
+                                5. الصق الـ Token في الحقل الثاني.
+                             </p>
+                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist Raw للمزامنة</label>
+                            <input type="url" id="gistUrl" value={localSettings.gistUrl} onChange={e => setLocalSettings({...localSettings, gistUrl: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://gist.githubusercontent.com/.../raw/.../recipe-studio-data.json"/>
+                            
+                            <label htmlFor="githubPat" className="block text-sm font-medium text-gray-700">GitHub Personal Access Token</label>
+                            <input type="password" id="githubPat" value={localSettings.githubPat} onChange={e => setLocalSettings({...localSettings, githubPat: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="ghp_..."/>
                         </div>
                         <div>
                             <label htmlFor="siteLogo" className="block text-sm font-medium text-gray-700">شعار الموقع</label>
@@ -565,7 +576,7 @@ const App: React.FC = () => {
             const gistUrl = localSettings.gistUrl;
 
             if (gistUrl && gistUrl.startsWith('http')) {
-                // Online mode: Fetch from Gist, don't use localStorage for data (except credentials)
+                // Online mode: Fetch from Gist
                 try {
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`); // Cache-busting
                     if (!response.ok) {
@@ -579,6 +590,12 @@ const App: React.FC = () => {
                 } catch (error) {
                     console.error("Fetch error:", error);
                     setFetchError("فشل تحميل البيانات من الرابط. يرجى التأكد من صحة الرابط أو المحاولة لاحقاً.");
+                    // Fallback to local data on fetch error
+                    const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
+                    const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
+                    setRecipes(localRecipes);
+                    setAds(localAds);
+                    setSettings(localSettings);
                 }
             } else {
                 // Offline mode: Load from localStorage
@@ -593,16 +610,76 @@ const App: React.FC = () => {
         loadData();
     }, []);
 
-    const saveDataToLocal = (data: { recipes?: Recipe[]; ads?: Ad[]; settings?: Settings }) => {
-        if (data.recipes) localStorage.setItem('recipes', JSON.stringify(data.recipes));
-        if (data.ads) localStorage.setItem('ads', JSON.stringify(data.ads));
-        if (data.settings) localStorage.setItem('settings', JSON.stringify(data.settings));
-    };
+    const saveAndSyncData = useCallback(async (updatedData: {
+        recipes?: Recipe[];
+        ads?: Ad[];
+        settings?: Settings;
+    }) => {
+        const newRecipes = updatedData.recipes ?? recipes;
+        const newAds = updatedData.ads ?? ads;
+        let newSettings = updatedData.settings ?? settings;
 
+        // Optimistically update React state
+        if (updatedData.recipes) setRecipes(updatedData.recipes);
+        if (updatedData.ads) setAds(updatedData.ads);
+        if (updatedData.settings) setSettings(updatedData.settings);
+
+        if (updatedData.settings) {
+            localStorage.setItem('settings', JSON.stringify(updatedData.settings));
+            // Ensure we use the latest settings for the sync operation
+            newSettings = updatedData.settings;
+        }
+
+        const GIST_FILENAME = 'recipe-studio-data.json';
+
+        if (newSettings.gistUrl && newSettings.githubPat) {
+            try {
+                const urlParts = newSettings.gistUrl.split('/');
+                const gistId = urlParts[4];
+
+                if (!gistId || gistId.length < 20) {
+                    throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط.");
+                }
+
+                const fullDataToSync = {
+                    recipes: newRecipes,
+                    ads: newAds,
+                    settings: { ...newSettings, githubPat: '' }, // Never save PAT in the Gist file
+                };
+                const content = JSON.stringify(fullDataToSync, null, 2);
+
+                const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `token ${newSettings.githubPat}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                    },
+                    body: JSON.stringify({
+                        description: `Recipe Studio Data - Last updated ${new Date().toISOString()}`,
+                        files: { [GIST_FILENAME]: { content: content } },
+                    }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`فشل تحديث Gist: ${response.status} ${errorData.message}`);
+                }
+                console.log("Data synced to Gist successfully.");
+            } catch (error) {
+                console.error("Gist sync error:", error);
+                alert(`خطأ في المزامنة مع Gist: ${error.message}. تم حفظ التغييرات محليًا فقط.`);
+                localStorage.setItem('recipes', JSON.stringify(newRecipes));
+                localStorage.setItem('ads', JSON.stringify(newAds));
+            }
+        } else {
+            localStorage.setItem('recipes', JSON.stringify(newRecipes));
+            localStorage.setItem('ads', JSON.stringify(newAds));
+        }
+    }, [recipes, ads, settings]);
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
-    const handleSaveRecipe = (recipeData: Omit<Recipe, 'id'>, id?: string) => {
+    const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id'>, id?: string) => {
         let updatedRecipes;
         if (id) {
             updatedRecipes = recipes.map(r => r.id === id ? { ...r, ...recipeData } : r);
@@ -610,16 +687,14 @@ const App: React.FC = () => {
             const newRecipe: Recipe = { id: Date.now().toString(), ...recipeData };
             updatedRecipes = [newRecipe, ...recipes];
         }
-        setRecipes(updatedRecipes);
-        saveDataToLocal({ recipes: updatedRecipes });
+        await saveAndSyncData({ recipes: updatedRecipes });
         setModalState(null);
     };
 
-    const handleDeleteRecipe = (id: string) => {
+    const handleDeleteRecipe = async (id: string) => {
         if (window.confirm('هل أنت متأكد من حذف هذه الوصفة؟')) {
             const updatedRecipes = recipes.filter(r => r.id !== id);
-            setRecipes(updatedRecipes);
-            saveDataToLocal({ recipes: updatedRecipes });
+            await saveAndSyncData({ recipes: updatedRecipes });
         }
     };
     
@@ -652,7 +727,7 @@ const App: React.FC = () => {
     };
 
     // ADS
-    const handleSaveAd = (adData: Omit<Ad, 'id'>, id?: string) => {
+    const handleSaveAd = async (adData: Omit<Ad, 'id'>, id?: string) => {
         let updatedAds;
         if (id) {
             updatedAds = ads.map(a => a.id === id ? { ...a, ...adData } : a);
@@ -660,21 +735,18 @@ const App: React.FC = () => {
             const newAd: Ad = { id: Date.now().toString(), ...adData };
             updatedAds = [newAd, ...ads];
         }
-        setAds(updatedAds);
-        saveDataToLocal({ ads: updatedAds });
+        await saveAndSyncData({ ads: updatedAds });
         setModalState(null);
     };
 
-    const handleDeleteAd = (id: string) => {
+    const handleDeleteAd = async (id: string) => {
         const updatedAds = ads.filter(a => a.id !== id);
-        setAds(updatedAds);
-        saveDataToLocal({ ads: updatedAds });
+        await saveAndSyncData({ ads: updatedAds });
     };
 
     // SETTINGS
-    const handleSaveSettings = (newSettings: Settings) => {
-        setSettings(newSettings);
-        saveDataToLocal({ settings: newSettings });
+    const handleSaveSettings = async (newSettings: Settings) => {
+        await saveAndSyncData({ settings: newSettings });
     };
 
     // AUTHENTICATION
@@ -697,7 +769,7 @@ const App: React.FC = () => {
         const data = {
             recipes,
             ads,
-            settings,
+            settings: { ...settings, githubPat: '' }, // Never export PAT
             adminCredentials
         };
         const jsonString = JSON.stringify(data, null, 2);
@@ -720,18 +792,18 @@ const App: React.FC = () => {
         }
 
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const data = JSON.parse(event.target?.result as string);
-                const dataToSave: { recipes?: Recipe[], ads?: Ad[], settings?: Settings } = {};
+                const dataToSync: { recipes?: Recipe[], ads?: Ad[], settings?: Settings } = {};
 
-                if (data.recipes) { setRecipes(data.recipes); dataToSave.recipes = data.recipes; }
-                if (data.ads) { setAds(data.ads); dataToSave.ads = data.ads; }
-                if (data.settings) { setSettings(data.settings); dataToSave.settings = data.settings; }
+                if (data.recipes) { dataToSync.recipes = data.recipes; }
+                if (data.ads) { dataToSync.ads = data.ads; }
+                if (data.settings) { dataToSync.settings = { ...settings, ...data.settings }; }
                 if (data.adminCredentials) setAdminCredentials(data.adminCredentials);
 
-                saveDataToLocal(dataToSave);
-                alert("تم استيراد البيانات بنجاح!");
+                await saveAndSyncData(dataToSync);
+                alert("تم استيراد البيانات ومزامنتها بنجاح!");
             } catch (error) {
                 alert("حدث خطأ أثناء قراءة الملف. تأكد من أنه ملف تصدير صحيح.");
             } finally {
@@ -776,7 +848,7 @@ const App: React.FC = () => {
             default:
                 return null;
         }
-    }, [modalState, recipes, ads, settings.youtubeSubscribeLink, isSubscribed]);
+    }, [modalState, recipes, ads, settings.youtubeSubscribeLink, isSubscribed, saveAndSyncData]);
     
     const modalTitle = useMemo(() => {
         if (!modalState) return '';
