@@ -20,6 +20,7 @@ export interface Settings {
   siteName: string;
   siteDescription: string;
   siteLogo: string; // Base64 encoded image
+  youtubeSubscribeLink: string;
 }
 
 export interface AdminCredentials {

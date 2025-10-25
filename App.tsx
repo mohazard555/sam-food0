@@ -14,6 +14,7 @@ type ModalState =
   | { type: 'addAd' }
   | { type: 'editAd'; ad: Ad }
   | { type: 'login' }
+  | { type: 'subscribeToView'; recipe: Recipe }
   | null;
 
 // --- INITIAL DATA ---
@@ -48,8 +49,9 @@ const initialAds: Ad[] = [
 
 const initialSettings: Settings = {
     siteName: 'استوديو الوصفات',
-    siteDescription: 'مرحبًا بكم في استوديو الوصفات! هذه المنصة مصممة لتكون مساحتكم الخاصة لإدارة ومشاركة وصفات الطبخ بكل سهولة ومتعة. هدفنا هو توفير أداة بسيطة وفعالة تتيح لكم إضافة وصفاتكم المفضلة، تصفحها، وتعديلها في أي وقت، وكل ذلك يتم تخزينه بأمان على جهازكم الخاص دون الحاجة لاتصال بالإنترنت أو خوادم خارجية.',
-    siteLogo: '' // Default empty, user can upload
+    siteDescription: 'مرحبًا بكم في استوديو الوصفات! هذه المنصة مصممة لتكون مساحتكم الخاصة لإدارة ومشاركة وصفات الطبخ بكل سهولة والمتعة. هدفنا هو توفير أداة بسيطة وفعالة تتيح لكم إضافة وصفاتكم المفضلة، تصفحها، وتعديلها في أي وقت، وكل ذلك يتم تخزينه بأمان على جهازكم الخاص دون الحاجة لاتصال بالإنترنت أو خوادم خارجية.',
+    siteLogo: '', // Default empty, user can upload
+    youtubeSubscribeLink: '',
 };
 
 const initialAdminCredentials: AdminCredentials = {
@@ -304,6 +306,34 @@ const LoginModalContent: React.FC<{ onLogin: (u: string, p: string) => void; onC
     );
 };
 
+const SubscribeModalContent: React.FC<{
+    subscribeUrl: string;
+    onContinue: () => void;
+}> = ({ subscribeUrl, onContinue }) => {
+    return (
+        <div className="text-center p-4">
+            <h3 className="text-xl font-bold text-gray-800 mb-2">للمتابعة، يرجى الاشتراك!</h3>
+            <p className="text-gray-600 mb-6">
+                عرض تفاصيل هذه الوصفة يتطلب الاشتراك في قناتنا على يوتيوب لدعمنا وتقديم المزيد من المحتوى الرائع.
+            </p>
+            <a
+                href={subscribeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center w-full mb-3 px-6 py-3 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-red-600 hover:bg-red-700"
+            >
+                الاشتراك في القناة
+            </a>
+            <button
+                onClick={onContinue}
+                className="w-full px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+                لقد اشتركت، تابع إلى الوصفة
+            </button>
+        </div>
+    );
+};
+
 
 const ManageAdsView: React.FC<{ ads: Ad[]; setModalState: (state: ModalState) => void; deleteAd: (id: string) => void }> = ({ ads, setModalState, deleteAd }) => {
     return (
@@ -406,6 +436,10 @@ const SettingsView: React.FC<{
                         <div>
                             <label htmlFor="siteDescription" className="block text-sm font-medium text-gray-700">وصف الموقع</label>
                             <textarea id="siteDescription" value={localSettings.siteDescription} onChange={e => setLocalSettings({...localSettings, siteDescription: e.target.value})} rows={4} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label htmlFor="youtubeLink" className="block text-sm font-medium text-gray-700">رابط قناة يوتيوب للاشتراك</label>
+                            <input type="url" id="youtubeLink" value={localSettings.youtubeSubscribeLink} onChange={e => setLocalSettings({...localSettings, youtubeSubscribeLink: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://www.youtube.com/channel/..."/>
                         </div>
                         <div>
                             <label htmlFor="siteLogo" className="block text-sm font-medium text-gray-700">شعار الموقع</label>
@@ -635,10 +669,15 @@ const App: React.FC = () => {
                  return <AdForm initialAd={modalState.ad} onSave={handleSaveAd} onCancel={() => setModalState(null)} />;
             case 'login':
                 return <LoginModalContent onLogin={handleLogin} onCancel={() => setModalState(null)} />;
+            case 'subscribeToView':
+                return <SubscribeModalContent 
+                            subscribeUrl={settings.youtubeSubscribeLink} 
+                            onContinue={() => setModalState({ type: 'viewRecipe', recipe: modalState.recipe })} 
+                        />;
             default:
                 return null;
         }
-    }, [modalState, recipes, ads]);
+    }, [modalState, recipes, ads, settings.youtubeSubscribeLink]);
     
     const modalTitle = useMemo(() => {
         if (!modalState) return '';
@@ -649,6 +688,7 @@ const App: React.FC = () => {
             case 'addAd': return 'إضافة إعلان جديد';
             case 'editAd': return 'تعديل الإعلان';
             case 'login': return 'تسجيل دخول المدير';
+            case 'subscribeToView': return 'دعم المبدع';
             default: return '';
         }
     }, [modalState]);
@@ -685,7 +725,15 @@ const App: React.FC = () => {
                                         key={recipe.id} 
                                         recipe={recipe} 
                                         isAdmin={isLoggedIn}
-                                        onView={() => isLoggedIn ? setModalState({ type: 'viewRecipe', recipe }) : setModalState({ type: 'login'})}
+                                        onView={() => {
+                                            if (isLoggedIn) {
+                                                setModalState({ type: 'viewRecipe', recipe });
+                                            } else if (settings.youtubeSubscribeLink) {
+                                                setModalState({ type: 'subscribeToView', recipe });
+                                            } else {
+                                                setModalState({ type: 'viewRecipe', recipe });
+                                            }
+                                        }}
                                         onEdit={() => setModalState({ type: 'editRecipe', recipe })}
                                         onDelete={() => handleDeleteRecipe(recipe.id)}
                                     />
@@ -723,7 +771,7 @@ const App: React.FC = () => {
             <footer className="bg-white mt-12 py-6 border-t">
                 <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500">
                     <p>&copy; {new Date().getFullYear()} {settings.siteName}. جميع الحقوق محفوظة.</p>
-                    <p className="text-xs mt-2">تم التطوير بواسطة مطور الذكاء الاصطناعي</p>
+                    <p className="text-xs mt-2">// المطور mohannad ahmad لاعلاناتكم التواصل عبر الرقم +963998171954</p>
                 </div>
             </footer>
         </div>
