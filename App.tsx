@@ -1,10 +1,9 @@
 
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { GoogleGenAI, Type } from '@google/genai';
 import type { Recipe, Ad, Settings, AdminCredentials } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon, SparklesIcon } from './components/Icons';
+import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon } from './components/Icons';
 import Modal from './components/Modal';
 
 // --- TYPE DEFINITIONS ---
@@ -17,7 +16,6 @@ type ModalState =
   | { type: 'editAd'; ad: Ad }
   | { type: 'login' }
   | { type: 'subscribeToView'; recipe: Recipe }
-  | { type: 'generateRecipeAI' }
   | null;
 
 // --- INITIAL DATA ---
@@ -205,128 +203,6 @@ const RecipeForm: React.FC<{ initialRecipe?: Partial<Recipe> | null; onSave: (re
         </form>
     );
 };
-
-const GenerateRecipeAIView: React.FC<{
-    onRecipeGenerated: (recipeData: Partial<Omit<Recipe, 'id'>>) => void;
-    onCancel: () => void;
-}> = ({ onRecipeGenerated, onCancel }) => {
-    const [prompt, setPrompt] = useState('');
-    const [generationStatus, setGenerationStatus] = useState<string>('');
-    const [error, setError] = useState<string | null>(null);
-
-    const handleGenerate = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!prompt.trim()) return;
-
-        setGenerationStatus('جاري التهيئة...');
-        setError(null);
-
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-            // Step 1: Generate Recipe Text
-            setGenerationStatus('جاري إنشاء تفاصيل الوصفة...');
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Your task is to create a food recipe based on the following user request: "${prompt}". Your response must be a JSON object only, with no additional text or markdown formatting. The JSON must strictly follow the specified schema. The required fields, in Arabic, are: "name" (the recipe name), "category" (the recipe category), "ingredients" (an array of strings for the ingredients), and "steps" (the preparation steps as a single string).`,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            name: { type: Type.STRING, description: "اسم الوصفة باللغة العربية." },
-                            category: { type: Type.STRING, description: "تصنيف الوصفة باللغة العربية (مثال: أطباق رئيسية، حلويات)." },
-                            ingredients: {
-                                type: Type.ARRAY,
-                                items: { type: Type.STRING },
-                                description: "مصفوفة من النصوص، كل نص يمثل مكونًا واحدًا باللغة العربية."
-                            },
-                            steps: { type: Type.STRING, description: "خطوات التحضير، منسقة كنص واحد مع فواصل أسطر، باللغة العربية." }
-                        },
-                        required: ["name", "category", "ingredients", "steps"]
-                    }
-                }
-            });
-            
-            // FIX: Clean the response text to remove potential markdown fences before parsing.
-            let jsonText = response.text.trim();
-            if (jsonText.startsWith("```json")) {
-                jsonText = jsonText.slice(7, -3).trim();
-            } else if (jsonText.startsWith("```")) {
-                jsonText = jsonText.slice(3, -3).trim();
-            }
-
-            const generatedData = JSON.parse(jsonText);
-
-            // Step 2: Generate Recipe Image
-            setGenerationStatus('جاري إنشاء صورة للوصفة...');
-            const imagePrompt = `صورة فوتوغرافية واقعية واحترافية لطبق ${generatedData.name}، يبدو شهيًا جدًا، إضاءة ممتازة، خلفية مطبخ بسيطة، جودة عالية.`;
-            
-            const imageResponse = await ai.models.generateImages({
-                model: 'imagen-4.0-generate-001',
-                prompt: imagePrompt,
-                config: {
-                  numberOfImages: 1,
-                  outputMimeType: 'image/jpeg',
-                  aspectRatio: '4:3',
-                },
-            });
-            
-            const base64ImageBytes: string = imageResponse.generatedImages[0].image.imageBytes;
-            const imageUrl = `data:image/jpeg;base64,${base64ImageBytes}`;
-
-            // Step 3: Callback with combined data
-            onRecipeGenerated({
-                ...generatedData,
-                imageUrl: imageUrl,
-            });
-
-        } catch (err) {
-            console.error("AI generation failed:", err);
-            setError("فشل في إنشاء الوصفة. يرجى المحاولة مرة أخرى.");
-        } finally {
-            setGenerationStatus('');
-        }
-    };
-
-    return (
-        <form onSubmit={handleGenerate} className="space-y-4">
-            <div>
-                <label htmlFor="aiPrompt" className="block text-sm font-medium text-gray-700">
-                    صف الوصفة التي تريدها
-                </label>
-                <textarea 
-                    id="aiPrompt" 
-                    value={prompt} 
-                    onChange={e => setPrompt(e.target.value)} 
-                    rows={4} 
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" 
-                    placeholder="مثال: طبق باستا بالدجاج سريع وصحي..." 
-                    required 
-                />
-            </div>
-             {generationStatus && (
-                <div className="flex items-center space-s-2 text-sm text-gray-600">
-                    <svg className="animate-spin h-5 w-5 text-orange-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>{generationStatus}</span>
-                </div>
-            )}
-            {error && <p className="text-red-600 text-sm">{error}</p>}
-            <div className="flex justify-end space-s-3 pt-4">
-                <button type="button" onClick={onCancel} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50" disabled={!!generationStatus}>
-                    إلغاء
-                </button>
-                <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300" disabled={!!generationStatus}>
-                    {generationStatus ? 'جاري الإنشاء...' : 'إنشاء وصفة'}
-                </button>
-            </div>
-        </form>
-    );
-};
-
 
 const RecipeDetailView: React.FC<{ recipe: Recipe; onDownload: () => void; onPrint: () => void; }> = ({ recipe, onDownload, onPrint }) => {
     return (
@@ -980,13 +856,6 @@ const App: React.FC = () => {
                  return <AdForm initialAd={modalState.ad} onSave={handleSaveAd} onCancel={() => setModalState(null)} />;
             case 'login':
                 return <LoginModalContent onLogin={handleLogin} onCancel={() => setModalState(null)} />;
-            case 'generateRecipeAI':
-                return <GenerateRecipeAIView 
-                            onRecipeGenerated={(data) => {
-                                setModalState({ type: 'addRecipe', initialData: data });
-                            }}
-                            onCancel={() => setModalState(null)}
-                        />;
             case 'subscribeToView':
                 return <SubscribeModalContent 
                             subscribeUrl={settings.youtubeSubscribeLink} 
@@ -1010,7 +879,6 @@ const App: React.FC = () => {
             case 'addAd': return 'إضافة إعلان جديد';
             case 'editAd': return 'تعديل الإعلان';
             case 'login': return 'تسجيل دخول المدير';
-            case 'generateRecipeAI': return 'إنشاء وصفة بالذكاء الاصطناعي';
             case 'subscribeToView': return 'خطوة أخيرة لعرض الوصفة!';
             default: return '';
         }
@@ -1048,10 +916,6 @@ const App: React.FC = () => {
                                     <h2 className="text-3xl font-bold text-gray-800">أحدث الوصفات</h2>
                                     {isLoggedIn && (
                                         <div className="flex items-center gap-3">
-                                            <button onClick={() => setModalState({ type: 'generateRecipeAI' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700">
-                                                <SparklesIcon className="w-5 h-5 me-2"/>
-                                                إنشاء بالذكاء الاصطناعي
-                                            </button>
                                             <button onClick={() => setModalState({ type: 'addRecipe' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
                                                 <PlusIcon className="w-5 h-5 me-2"/>
                                                 إضافة وصفة
