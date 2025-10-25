@@ -1,0 +1,5 @@
+{
+  "name": "Recipe Studio",
+  "description": "A professional recipe management website with a promotional ads feature. Users can add, view, edit, delete, and download recipes. All data is stored locally in the browser.",
+  "requestFramePermissions": []
+}
