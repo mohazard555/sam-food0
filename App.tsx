@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import type { Recipe, Ad, Settings, AdminCredentials } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon } from './components/Icons';
+import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon } from './components/Icons';
 import Modal from './components/Modal';
 
 // --- TYPE DEFINITIONS ---
@@ -83,7 +83,7 @@ const Header: React.FC<{
     const navLinkClasses = (view: View) => `px-4 py-2 rounded-md text-sm font-medium transition-colors ${currentView === view ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-orange-100 hover:text-orange-700'}`;
 
     return (
-        <header className="bg-white shadow-md sticky top-0 z-40">
+        <header className="bg-white shadow-md sticky top-0 z-40 no-print">
             <div className="container mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-16">
                     <button onClick={() => setView('home')} className="flex items-center gap-2">
@@ -200,9 +200,9 @@ const RecipeForm: React.FC<{ initialRecipe?: Recipe | null; onSave: (recipe: Omi
     );
 };
 
-const RecipeDetailView: React.FC<{ recipe: Recipe; onDownload: () => void; }> = ({ recipe, onDownload }) => {
+const RecipeDetailView: React.FC<{ recipe: Recipe; onDownload: () => void; onPrint: () => void; }> = ({ recipe, onDownload, onPrint }) => {
     return (
-        <div className="space-y-6">
+        <div className="printable-area space-y-6">
             <img src={recipe.imageUrl} alt={recipe.name} className="w-full h-64 object-cover rounded-lg"/>
             <div>
                 <span className="text-sm bg-orange-100 text-orange-800 px-3 py-1 rounded-full">{recipe.category}</span>
@@ -217,10 +217,14 @@ const RecipeDetailView: React.FC<{ recipe: Recipe; onDownload: () => void; }> = 
                 <h3 className="text-2xl font-bold text-gray-900">خطوات التحضير</h3>
                 <p className="mt-2 whitespace-pre-wrap text-gray-700">{recipe.steps}</p>
             </div>
-            <div className="text-center pt-4">
+            <div className="text-center pt-4 no-print flex justify-center gap-4">
                  <button onClick={onDownload} className="inline-flex items-center px-6 py-2 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-orange-600 hover:bg-orange-700">
                     <DownloadIcon className="w-5 h-5 me-2"/>
                     تحميل الوصفة
+                </button>
+                <button onClick={onPrint} className="inline-flex items-center px-6 py-2 border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 bg-white hover:bg-gray-50">
+                    <PrintIcon className="w-5 h-5 me-2"/>
+                    طباعة الوصفة
                 </button>
             </div>
         </div>
@@ -308,8 +312,8 @@ const LoginModalContent: React.FC<{ onLogin: (u: string, p: string) => void; onC
 
 const SubscribeModalContent: React.FC<{
     subscribeUrl: string;
-    onContinue: () => void;
-}> = ({ subscribeUrl, onContinue }) => {
+    onSubscribed: () => void;
+}> = ({ subscribeUrl, onSubscribed }) => {
     return (
         <div className="text-center p-4">
             <h3 className="text-xl font-bold text-gray-800 mb-2">للمتابعة، يرجى الاشتراك!</h3>
@@ -325,7 +329,7 @@ const SubscribeModalContent: React.FC<{
                 الاشتراك في القناة
             </a>
             <button
-                onClick={onContinue}
+                onClick={onSubscribed}
                 className="w-full px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
                 لقد اشتركت، تابع إلى الوصفة
@@ -529,6 +533,8 @@ const App: React.FC = () => {
     const [modalState, setModalState] = useState<ModalState>(null);
     const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
     const [selectedCategory, setSelectedCategory] = useState<string>('الكل');
+    const [isSubscribed, setIsSubscribed] = useLocalStorage<boolean>('ytSubscribed', false);
+
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
@@ -570,6 +576,10 @@ const App: React.FC = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    };
+
+    const handlePrint = () => {
+      window.print();
     };
 
     // ADS
@@ -662,7 +672,7 @@ const App: React.FC = () => {
             case 'editRecipe':
                 return <RecipeForm initialRecipe={modalState.recipe} onSave={handleSaveRecipe} onCancel={() => setModalState(null)} />;
             case 'viewRecipe':
-                return <RecipeDetailView recipe={modalState.recipe} onDownload={() => handleDownloadRecipe(modalState.recipe)} />;
+                return <RecipeDetailView recipe={modalState.recipe} onDownload={() => handleDownloadRecipe(modalState.recipe)} onPrint={handlePrint} />;
             case 'addAd':
                 return <AdForm onSave={handleSaveAd} onCancel={() => setModalState(null)} />;
             case 'editAd':
@@ -672,12 +682,15 @@ const App: React.FC = () => {
             case 'subscribeToView':
                 return <SubscribeModalContent 
                             subscribeUrl={settings.youtubeSubscribeLink} 
-                            onContinue={() => setModalState({ type: 'viewRecipe', recipe: modalState.recipe })} 
+                            onSubscribed={() => {
+                                setIsSubscribed(true);
+                                setModalState({ type: 'viewRecipe', recipe: modalState.recipe });
+                            }} 
                         />;
             default:
                 return null;
         }
-    }, [modalState, recipes, ads, settings.youtubeSubscribeLink]);
+    }, [modalState, recipes, ads, settings.youtubeSubscribeLink, isSubscribed]);
     
     const modalTitle = useMemo(() => {
         if (!modalState) return '';
@@ -688,7 +701,7 @@ const App: React.FC = () => {
             case 'addAd': return 'إضافة إعلان جديد';
             case 'editAd': return 'تعديل الإعلان';
             case 'login': return 'تسجيل دخول المدير';
-            case 'subscribeToView': return 'دعم المبدع';
+            case 'subscribeToView': return 'خطوة أخيرة لعرض الوصفة!';
             default: return '';
         }
     }, [modalState]);
@@ -726,7 +739,7 @@ const App: React.FC = () => {
                                         recipe={recipe} 
                                         isAdmin={isLoggedIn}
                                         onView={() => {
-                                            if (isLoggedIn) {
+                                            if (isLoggedIn || isSubscribed) {
                                                 setModalState({ type: 'viewRecipe', recipe });
                                             } else if (settings.youtubeSubscribeLink) {
                                                 setModalState({ type: 'subscribeToView', recipe });
@@ -768,7 +781,7 @@ const App: React.FC = () => {
                 {modalContent}
             </Modal>
             
-            <footer className="bg-white mt-12 py-6 border-t">
+            <footer className="bg-white mt-12 py-6 border-t no-print">
                 <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500">
                     <p>&copy; {new Date().getFullYear()} {settings.siteName}. جميع الحقوق محفوظة.</p>
                     <p className="text-xs mt-2">// المطور mohannad ahmad لاعلاناتكم التواصل عبر الرقم +963998171954</p>
