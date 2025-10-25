@@ -211,21 +211,24 @@ const GenerateRecipeAIView: React.FC<{
     onCancel: () => void;
 }> = ({ onRecipeGenerated, onCancel }) => {
     const [prompt, setPrompt] = useState('');
-    const [isGenerating, setIsGenerating] = useState(false);
+    const [generationStatus, setGenerationStatus] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
 
     const handleGenerate = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!prompt.trim()) return;
 
-        setIsGenerating(true);
+        setGenerationStatus('جاري التهيئة...');
         setError(null);
 
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+            // Step 1: Generate Recipe Text
+            setGenerationStatus('جاري إنشاء تفاصيل الوصفة...');
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `مهمتك هي إنشاء وصفة طعام بناءً على طلب المستخدم التالي: "${prompt}". يجب أن تكون الاستجابة عبارة عن كائن JSON فقط، بدون أي نص إضافي أو علامات markdown. يجب أن يتبع JSON المخطط المحدد بدقة. الحقول المطلوبة باللغة العربية هي: "name" (اسم الوصفة)، "category" (تصنيف الوصفة)، "ingredients" (مصفوفة من السلاسل النصية للمكونات)، و "steps" (خطوات التحضير كنص واحد).`,
+                contents: `Your task is to create a food recipe based on the following user request: "${prompt}". Your response must be a JSON object only, with no additional text or markdown formatting. The JSON must strictly follow the specified schema. The required fields, in Arabic, are: "name" (the recipe name), "category" (the recipe category), "ingredients" (an array of strings for the ingredients), and "steps" (the preparation steps as a single string).`,
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: {
@@ -246,16 +249,35 @@ const GenerateRecipeAIView: React.FC<{
             });
 
             const generatedData = JSON.parse(response.text);
+
+            // Step 2: Generate Recipe Image
+            setGenerationStatus('جاري إنشاء صورة للوصفة...');
+            const imagePrompt = `صورة فوتوغرافية واقعية واحترافية لطبق ${generatedData.name}، يبدو شهيًا جدًا، إضاءة ممتازة، خلفية مطبخ بسيطة، جودة عالية.`;
+            
+            const imageResponse = await ai.models.generateImages({
+                model: 'imagen-4.0-generate-001',
+                prompt: imagePrompt,
+                config: {
+                  numberOfImages: 1,
+                  outputMimeType: 'image/jpeg',
+                  aspectRatio: '4:3',
+                },
+            });
+            
+            const base64ImageBytes: string = imageResponse.generatedImages[0].image.imageBytes;
+            const imageUrl = `data:image/jpeg;base64,${base64ImageBytes}`;
+
+            // Step 3: Callback with combined data
             onRecipeGenerated({
                 ...generatedData,
-                imageUrl: `https://picsum.photos/seed/${generatedData.name.replace(/\s/g, '-')}/400/300` // Add a placeholder image
+                imageUrl: imageUrl,
             });
 
         } catch (err) {
             console.error("AI generation failed:", err);
             setError("فشل في إنشاء الوصفة. يرجى المحاولة مرة أخرى.");
         } finally {
-            setIsGenerating(false);
+            setGenerationStatus('');
         }
     };
 
@@ -275,13 +297,22 @@ const GenerateRecipeAIView: React.FC<{
                     required 
                 />
             </div>
+             {generationStatus && (
+                <div className="flex items-center space-s-2 text-sm text-gray-600">
+                    <svg className="animate-spin h-5 w-5 text-orange-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>{generationStatus}</span>
+                </div>
+            )}
             {error && <p className="text-red-600 text-sm">{error}</p>}
             <div className="flex justify-end space-s-3 pt-4">
-                <button type="button" onClick={onCancel} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50" disabled={isGenerating}>
+                <button type="button" onClick={onCancel} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50" disabled={!!generationStatus}>
                     إلغاء
                 </button>
-                <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300" disabled={isGenerating}>
-                    {isGenerating ? 'جاري الإنشاء...' : 'إنشاء وصفة'}
+                <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300" disabled={!!generationStatus}>
+                    {generationStatus ? 'جاري الإنشاء...' : 'إنشاء وصفة'}
                 </button>
             </div>
         </form>
@@ -730,10 +761,14 @@ const App: React.FC = () => {
         if (updatedData.ads) setAds(updatedData.ads);
         if (updatedData.settings) setSettings(updatedData.settings);
 
-        // Update local storage for settings immediately
+        // ALWAYS persist to localStorage to maintain offline capability and data consistency.
+        localStorage.setItem('recipes', JSON.stringify(newRecipes));
+        localStorage.setItem('ads', JSON.stringify(newAds));
         if (updatedData.settings) {
             localStorage.setItem('settings', JSON.stringify(updatedData.settings));
             newSettings = updatedData.settings; // Ensure we use the latest for sync
+        } else {
+            localStorage.setItem('settings', JSON.stringify(newSettings));
         }
 
         const GIST_FILENAME = 'recipe-studio-data.json';
@@ -773,15 +808,8 @@ const App: React.FC = () => {
                 console.log("Data synced to Gist successfully.");
             } catch (error) {
                 console.error("Gist sync error:", error);
-                alert(`خطأ في المزامنة مع Gist: ${error.message}. تم حفظ التغييرات محليًا فقط.`);
-                // Save locally as a fallback
-                localStorage.setItem('recipes', JSON.stringify(newRecipes));
-                localStorage.setItem('ads', JSON.stringify(newAds));
+                alert(`خطأ في المزامنة مع Gist: ${error.message}. تم حفظ التغييرات محليًا بنجاح.`);
             }
-        } else {
-            // If sync is not configured, just save locally
-            localStorage.setItem('recipes', JSON.stringify(newRecipes));
-            localStorage.setItem('ads', JSON.stringify(newAds));
         }
     }, [recipes, ads, settings]);
 
