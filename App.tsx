@@ -247,8 +247,16 @@ const GenerateRecipeAIView: React.FC<{
                     }
                 }
             });
+            
+            // FIX: Clean the response text to remove potential markdown fences before parsing.
+            let jsonText = response.text.trim();
+            if (jsonText.startsWith("```json")) {
+                jsonText = jsonText.slice(7, -3).trim();
+            } else if (jsonText.startsWith("```")) {
+                jsonText = jsonText.slice(3, -3).trim();
+            }
 
-            const generatedData = JSON.parse(response.text);
+            const generatedData = JSON.parse(jsonText);
 
             // Step 2: Generate Recipe Image
             setGenerationStatus('جاري إنشاء صورة للوصفة...');
