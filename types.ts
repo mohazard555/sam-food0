@@ -9,9 +9,20 @@ export interface Recipe {
 }
 
 export interface Ad {
-  id: string;
+  id:string;
   title: string;
   description: string;
   imageUrl: string;
   link: string;
+}
+
+export interface Settings {
+  siteName: string;
+  siteDescription: string;
+  siteLogo: string; // Base64 encoded image
+}
+
+export interface AdminCredentials {
+  username: string;
+  password: string;
 }
