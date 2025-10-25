@@ -1,20 +1,23 @@
 
+
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { GoogleGenAI, Type } from '@google/genai';
 import type { Recipe, Ad, Settings, AdminCredentials } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon } from './components/Icons';
+import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon, SparklesIcon } from './components/Icons';
 import Modal from './components/Modal';
 
 // --- TYPE DEFINITIONS ---
 type View = 'home' | 'about' | 'manageAds' | 'settings';
 type ModalState = 
-  | { type: 'addRecipe' }
+  | { type: 'addRecipe'; initialData?: Partial<Recipe> }
   | { type: 'editRecipe'; recipe: Recipe }
   | { type: 'viewRecipe'; recipe: Recipe }
   | { type: 'addAd' }
   | { type: 'editAd'; ad: Ad }
   | { type: 'login' }
   | { type: 'subscribeToView'; recipe: Recipe }
+  | { type: 'generateRecipeAI' }
   | null;
 
 // --- INITIAL DATA ---
@@ -135,6 +138,7 @@ const AdCard: React.FC<{ ad: Ad }> = ({ ad }) => (
     <div className="bg-white rounded-lg shadow-lg overflow-hidden">
         <img src={ad.imageUrl} alt={ad.title} className="w-full h-40 object-cover"/>
         <div className="p-4">
+            {/* FIX: Corrected invalid 'hh4' JSX element to 'h4'. */}
             <h4 className="font-bold text-gray-800">{ad.title}</h4>
             <p className="text-sm text-gray-600 mt-1">{ad.description}</p>
             <a href={ad.link} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block bg-amber-500 text-white px-4 py-2 rounded-md text-sm font-semibold hover:bg-amber-600 transition-colors w-full text-center">
@@ -144,12 +148,12 @@ const AdCard: React.FC<{ ad: Ad }> = ({ ad }) => (
     </div>
 );
 
-const RecipeForm: React.FC<{ initialRecipe?: Recipe | null; onSave: (recipe: Omit<Recipe, 'id'>, id?: string) => void; onCancel: () => void; }> = ({ initialRecipe, onSave, onCancel }) => {
+const RecipeForm: React.FC<{ initialRecipe?: Partial<Recipe> | null; onSave: (recipe: Omit<Recipe, 'id'>, id?: string) => void; onCancel: () => void; }> = ({ initialRecipe, onSave, onCancel }) => {
     const [name, setName] = useState(initialRecipe?.name || '');
     const [category, setCategory] = useState(initialRecipe?.category || '');
     const [imageUrl, setImageUrl] = useState(initialRecipe?.imageUrl || '');
     const [imagePreview, setImagePreview] = useState(initialRecipe?.imageUrl || '');
-    const [ingredients, setIngredients] = useState(initialRecipe?.ingredients.join('\n') || '');
+    const [ingredients, setIngredients] = useState(initialRecipe?.ingredients?.join('\n') || '');
     const [steps, setSteps] = useState(initialRecipe?.steps || '');
 
     const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -201,6 +205,89 @@ const RecipeForm: React.FC<{ initialRecipe?: Recipe | null; onSave: (recipe: Omi
         </form>
     );
 };
+
+const GenerateRecipeAIView: React.FC<{
+    onRecipeGenerated: (recipeData: Partial<Omit<Recipe, 'id'>>) => void;
+    onCancel: () => void;
+}> = ({ onRecipeGenerated, onCancel }) => {
+    const [prompt, setPrompt] = useState('');
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const handleGenerate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!prompt.trim()) return;
+
+        setIsGenerating(true);
+        setError(null);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: `Generate a recipe based on this description: "${prompt}". Provide a suitable name, category, a list of ingredients, and the preparation steps.`,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING, description: "The name of the recipe in Arabic." },
+                            category: { type: Type.STRING, description: "The category of the recipe in Arabic (e.g., Main Dishes, Desserts)." },
+                            ingredients: {
+                                type: Type.ARRAY,
+                                items: { type: Type.STRING },
+                                description: "An array of strings, where each string is one ingredient in Arabic."
+                            },
+                            steps: { type: Type.STRING, description: "The preparation steps, formatted as a single string with newlines, in Arabic." }
+                        },
+                        required: ["name", "category", "ingredients", "steps"]
+                    }
+                }
+            });
+
+            const generatedData = JSON.parse(response.text);
+            onRecipeGenerated({
+                ...generatedData,
+                imageUrl: `https://picsum.photos/seed/${generatedData.name.replace(/\s/g, '-')}/400/300` // Add a placeholder image
+            });
+
+        } catch (err) {
+            console.error("AI generation failed:", err);
+            setError("فشل في إنشاء الوصفة. يرجى المحاولة مرة أخرى.");
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleGenerate} className="space-y-4">
+            <div>
+                <label htmlFor="aiPrompt" className="block text-sm font-medium text-gray-700">
+                    صف الوصفة التي تريدها
+                </label>
+                <textarea 
+                    id="aiPrompt" 
+                    value={prompt} 
+                    onChange={e => setPrompt(e.target.value)} 
+                    rows={4} 
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" 
+                    placeholder="مثال: طبق باستا بالدجاج سريع وصحي..." 
+                    required 
+                />
+            </div>
+            {error && <p className="text-red-600 text-sm">{error}</p>}
+            <div className="flex justify-end space-s-3 pt-4">
+                <button type="button" onClick={onCancel} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50" disabled={isGenerating}>
+                    إلغاء
+                </button>
+                <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300" disabled={isGenerating}>
+                    {isGenerating ? 'جاري الإنشاء...' : 'إنشاء وصفة'}
+                </button>
+            </div>
+        </form>
+    );
+};
+
 
 const RecipeDetailView: React.FC<{ recipe: Recipe; onDownload: () => void; onPrint: () => void; }> = ({ recipe, onDownload, onPrint }) => {
     return (
@@ -550,6 +637,13 @@ const CategoryFilter: React.FC<{
 
 // --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
+    // --- PUBLIC DATA SOURCE CONFIGURATION ---
+    // To make your recipe data public for all visitors, paste your Gist's "Raw" URL here.
+    // This will become the default data source for anyone visiting the site.
+    // The admin can still log in to manage this data.
+    // Example: 'https://gist.githubusercontent.com/your-username/12345abc/raw/...'
+    const PUBLIC_GIST_URL = ""; 
+
     // --- STATE MANAGEMENT ---
     const [recipes, setRecipes] = useState<Recipe[]>([]);
     const [ads, setAds] = useState<Ad[]>([]);
@@ -572,13 +666,16 @@ const App: React.FC = () => {
             setFetchError(null);
             
             const localSettingsRaw = localStorage.getItem('settings');
-            const localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : initialSettings;
-            const gistUrl = localSettings.gistUrl;
+            const localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
+            
+            // Admin's Gist URL from local storage takes precedence.
+            // Otherwise, use the public URL if it's defined.
+            const gistUrl = localSettings?.gistUrl || PUBLIC_GIST_URL;
 
             if (gistUrl && gistUrl.startsWith('http')) {
                 // Online mode: Fetch from Gist
                 try {
-                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`); // Cache-busting
+                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`);
                     if (!response.ok) {
                         throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
                     }
@@ -586,24 +683,33 @@ const App: React.FC = () => {
                     
                     setRecipes(data.recipes || []);
                     setAds(data.ads || []);
-                    setSettings(data.settings || initialSettings);
+
+                    // Use fetched settings, but preserve admin's local PAT/URL if they exist.
+                    const finalSettings = {
+                        ...(data.settings || initialSettings),
+                        gistUrl: localSettings?.gistUrl || data.settings?.gistUrl || PUBLIC_GIST_URL,
+                        githubPat: localSettings?.githubPat || ''
+                    };
+                    setSettings(finalSettings);
+
                 } catch (error) {
                     console.error("Fetch error:", error);
                     setFetchError("فشل تحميل البيانات من الرابط. يرجى التأكد من صحة الرابط أو المحاولة لاحقاً.");
-                    // Fallback to local data on fetch error
-                    const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
-                    const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
-                    setRecipes(localRecipes);
-                    setAds(localAds);
-                    setSettings(localSettings);
+                    // On error, fallback to admin's local storage or initial defaults.
+                    const fallbackRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
+                    const fallbackAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
+                    setRecipes(fallbackRecipes);
+                    setAds(fallbackAds);
+                    setSettings(localSettings || initialSettings);
                 }
             } else {
-                // Offline mode: Load from localStorage
+                // Offline mode: Gist is not configured at all.
+                // Load from localStorage (for returning users/admin) or use initial data.
                 const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
                 const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
                 setRecipes(localRecipes);
                 setAds(localAds);
-                setSettings(localSettings);
+                setSettings(localSettings || initialSettings);
             }
             setIsLoading(false);
         };
@@ -624,10 +730,10 @@ const App: React.FC = () => {
         if (updatedData.ads) setAds(updatedData.ads);
         if (updatedData.settings) setSettings(updatedData.settings);
 
+        // Update local storage for settings immediately
         if (updatedData.settings) {
             localStorage.setItem('settings', JSON.stringify(updatedData.settings));
-            // Ensure we use the latest settings for the sync operation
-            newSettings = updatedData.settings;
+            newSettings = updatedData.settings; // Ensure we use the latest for sync
         }
 
         const GIST_FILENAME = 'recipe-studio-data.json';
@@ -668,10 +774,12 @@ const App: React.FC = () => {
             } catch (error) {
                 console.error("Gist sync error:", error);
                 alert(`خطأ في المزامنة مع Gist: ${error.message}. تم حفظ التغييرات محليًا فقط.`);
+                // Save locally as a fallback
                 localStorage.setItem('recipes', JSON.stringify(newRecipes));
                 localStorage.setItem('ads', JSON.stringify(newAds));
             }
         } else {
+            // If sync is not configured, just save locally
             localStorage.setItem('recipes', JSON.stringify(newRecipes));
             localStorage.setItem('ads', JSON.stringify(newAds));
         }
@@ -825,7 +933,7 @@ const App: React.FC = () => {
 
         switch(modalState.type) {
             case 'addRecipe':
-                return <RecipeForm onSave={handleSaveRecipe} onCancel={() => setModalState(null)} />;
+                return <RecipeForm initialRecipe={modalState.initialData} onSave={handleSaveRecipe} onCancel={() => setModalState(null)} />;
             case 'editRecipe':
                 return <RecipeForm initialRecipe={modalState.recipe} onSave={handleSaveRecipe} onCancel={() => setModalState(null)} />;
             case 'viewRecipe':
@@ -836,6 +944,13 @@ const App: React.FC = () => {
                  return <AdForm initialAd={modalState.ad} onSave={handleSaveAd} onCancel={() => setModalState(null)} />;
             case 'login':
                 return <LoginModalContent onLogin={handleLogin} onCancel={() => setModalState(null)} />;
+            case 'generateRecipeAI':
+                return <GenerateRecipeAIView 
+                            onRecipeGenerated={(data) => {
+                                setModalState({ type: 'addRecipe', initialData: data });
+                            }}
+                            onCancel={() => setModalState(null)}
+                        />;
             case 'subscribeToView':
                 return <SubscribeModalContent 
                             subscribeUrl={settings.youtubeSubscribeLink} 
@@ -859,6 +974,7 @@ const App: React.FC = () => {
             case 'addAd': return 'إضافة إعلان جديد';
             case 'editAd': return 'تعديل الإعلان';
             case 'login': return 'تسجيل دخول المدير';
+            case 'generateRecipeAI': return 'إنشاء وصفة بالذكاء الاصطناعي';
             case 'subscribeToView': return 'خطوة أخيرة لعرض الوصفة!';
             default: return '';
         }
@@ -895,10 +1011,16 @@ const App: React.FC = () => {
                                 <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
                                     <h2 className="text-3xl font-bold text-gray-800">أحدث الوصفات</h2>
                                     {isLoggedIn && (
-                                        <button onClick={() => setModalState({ type: 'addRecipe' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
-                                            <PlusIcon className="w-5 h-5 me-2"/>
-                                            إضافة وصفة
-                                        </button>
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={() => setModalState({ type: 'generateRecipeAI' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700">
+                                                <SparklesIcon className="w-5 h-5 me-2"/>
+                                                إنشاء بالذكاء الاصطناعي
+                                            </button>
+                                            <button onClick={() => setModalState({ type: 'addRecipe' })} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
+                                                <PlusIcon className="w-5 h-5 me-2"/>
+                                                إضافة وصفة
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
                                 <CategoryFilter recipes={recipes} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
