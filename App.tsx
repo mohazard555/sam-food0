@@ -225,7 +225,7 @@ const GenerateRecipeAIView: React.FC<{
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `بناءً على الوصف التالي: "${prompt}"، قم بإنشاء وصفة طعام. يجب أن تكون الإجابة بتنسيق JSON حصريًا، وتتضمن الحقول التالية باللغة العربية: name (اسم الوصفة)، category (التصنيف)، ingredients (قائمة بالمكونات كنصوص)، و steps (خطوات التحضير كنص واحد).`,
+                contents: `مهمتك هي إنشاء وصفة طعام بناءً على طلب المستخدم التالي: "${prompt}". يجب أن تكون الاستجابة عبارة عن كائن JSON فقط، بدون أي نص إضافي أو علامات markdown. يجب أن يتبع JSON المخطط المحدد بدقة. الحقول المطلوبة باللغة العربية هي: "name" (اسم الوصفة)، "category" (تصنيف الوصفة)، "ingredients" (مصفوفة من السلاسل النصية للمكونات)، و "steps" (خطوات التحضير كنص واحد).`,
                 config: {
                     responseMimeType: "application/json",
                     responseSchema: {
