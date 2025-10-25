@@ -112,7 +112,7 @@ const Header: React.FC<{
 
 const RecipeCard: React.FC<{ recipe: Recipe; onView: () => void; onEdit: () => void; onDelete: () => void; isAdmin: boolean; }> = ({ recipe, onView, onEdit, onDelete, isAdmin }) => (
     <div className="bg-white rounded-lg shadow-lg overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 flex flex-col">
-        <img src={recipe.imageUrl} alt={recipe.name} className="w-full h-48 object-cover"/>
+        <img src={recipe.imageUrl} alt={recipe.name} className="w-full h-56 object-cover"/>
         <div className="p-4 flex flex-col flex-grow">
             <span className="text-xs bg-orange-100 text-orange-800 px-2 py-1 rounded-full self-start">{recipe.category}</span>
             <h3 className="text-lg font-bold mt-2 text-gray-800 flex-grow">{recipe.name}</h3>
@@ -312,27 +312,32 @@ const LoginModalContent: React.FC<{ onLogin: (u: string, p: string) => void; onC
 
 const SubscribeModalContent: React.FC<{
     subscribeUrl: string;
-    onSubscribed: () => void;
-}> = ({ subscribeUrl, onSubscribed }) => {
+    onProceed: () => void;
+    onCancel: () => void;
+}> = ({ subscribeUrl, onProceed, onCancel }) => {
+    
+    const handleProceed = () => {
+        window.open(subscribeUrl, '_blank', 'noopener,noreferrer');
+        onProceed();
+    };
+
     return (
         <div className="text-center p-4">
             <h3 className="text-xl font-bold text-gray-800 mb-2">للمتابعة، يرجى الاشتراك!</h3>
             <p className="text-gray-600 mb-6">
-                عرض تفاصيل هذه الوصفة يتطلب الاشتراك في قناتنا على يوتيوب لدعمنا وتقديم المزيد من المحتوى الرائع.
+                عرض تفاصيل هذه الوصفة يتطلب الاشتراك في قناتنا على يوتيوب لدعمنا. اضغط على الزر أدناه لزيارة القناة وسيتم عرض الوصفة لك تلقائياً.
             </p>
-            <a
-                href={subscribeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+            <button
+                onClick={handleProceed}
                 className="inline-flex items-center justify-center w-full mb-3 px-6 py-3 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-red-600 hover:bg-red-700"
             >
-                الاشتراك في القناة
-            </a>
-            <button
-                onClick={onSubscribed}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                الانتقال للقناة وعرض الوصفة
+            </button>
+             <button
+                onClick={onCancel}
+                className="w-full px-4 py-2 border border-transparent rounded-md text-sm font-medium text-gray-500 hover:text-gray-700"
             >
-                لقد اشتركت، تابع إلى الوصفة
+                إلغاء
             </button>
         </div>
     );
@@ -682,10 +687,11 @@ const App: React.FC = () => {
             case 'subscribeToView':
                 return <SubscribeModalContent 
                             subscribeUrl={settings.youtubeSubscribeLink} 
-                            onSubscribed={() => {
+                            onProceed={() => {
                                 setIsSubscribed(true);
                                 setModalState({ type: 'viewRecipe', recipe: modalState.recipe });
                             }} 
+                            onCancel={() => setModalState(null)}
                         />;
             default:
                 return null;
