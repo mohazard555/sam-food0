@@ -634,11 +634,20 @@ const App: React.FC = () => {
                 } catch (error) {
                     console.error("Fetch error:", error);
                     setFetchError("فشل تحميل البيانات من الرابط. قد يكون الموقع غير متصل. يتم عرض البيانات المحفوظة محلياً إن وجدت.");
-                    // Fallback to locally cached data for offline public user
-                    const fallbackRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
-                    const fallbackAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
-                    setRecipes(fallbackRecipes);
-                    setAds(fallbackAds);
+                    
+                    // --- Fallback Logic ---
+                    // Try to load from local cache first (for returning offline visitors).
+                    const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
+                    const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
+
+                    // If cache is empty or invalid (like for a new visitor), use the default initial recipes.
+                    if (cachedRecipes && cachedRecipes.length > 0) {
+                        setRecipes(cachedRecipes);
+                        setAds(cachedAds || initialAds); // Ensure ads also have a fallback
+                    } else {
+                        setRecipes(initialRecipes);
+                        setAds(initialAds);
+                    }
                     setSettings(localSettings || initialSettings);
                 }
             } else {
