@@ -580,33 +580,38 @@ const App: React.FC = () => {
             setIsLoading(true);
             setFetchError(null);
             
-            const localSettingsRaw = localStorage.getItem('settings');
-            const localSettings: Settings | null = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
-
+            let localSettings: Settings | null = null;
+            try {
+                const localSettingsRaw = localStorage.getItem('settings');
+                localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
+            } catch (e) {
+                console.warn("Could not access local storage for settings. Proceeding without cache.", e);
+            }
+            
             // --- Admin Mode Logic ---
-            // If a PAT is configured, we assume it's an admin's browser.
-            // Local storage becomes the source of truth to prevent data loss.
             if (localSettings?.githubPat) {
                 console.log("Admin context detected. Loading from local storage.");
-                const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
-                const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
-
-                setRecipes(localRecipes);
-                setAds(localAds);
+                try {
+                    const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
+                    const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
+                    setRecipes(localRecipes);
+                    setAds(localAds);
+                } catch(e) {
+                    console.error("Failed to load admin data from local storage, using initial data.", e);
+                    setRecipes(initialRecipes);
+                    setAds(initialAds);
+                }
                 setSettings(localSettings);
                 setIsLoading(false);
-                return; // Stop here for admin mode.
+                return;
             }
 
             // --- Public Mode Logic ---
-            // No PAT found, so we're in public view. Fetch from Gist.
-            // Use the Gist URL from local settings if it exists, otherwise use the public URL.
             const gistUrl = localSettings?.gistUrl || PUBLIC_GIST_URL;
 
             if (gistUrl && gistUrl.startsWith('http')) {
                 console.log(`Public context. Fetching from Gist: ${gistUrl}`);
                 try {
-                    // Fetch fresh data from the Gist
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`);
                     if (!response.ok) {
                         throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
@@ -615,43 +620,53 @@ const App: React.FC = () => {
                     
                     const recipesFromGist = data.recipes || [];
                     const adsFromGist = data.ads || [];
-                    // Ensure settings from Gist don't include sensitive info and respect public URL
                     const settingsFromGist = {
                         ...(data.settings || initialSettings),
                         gistUrl: localSettings?.gistUrl || PUBLIC_GIST_URL,
-                        githubPat: '', // Never load a PAT for public view
+                        githubPat: '', 
                     };
 
                     setRecipes(recipesFromGist);
                     setAds(adsFromGist);
                     setSettings(settingsFromGist);
 
-                    // Save the fetched public data to local storage for offline access
-                    localStorage.setItem('recipes', JSON.stringify(recipesFromGist));
-                    localStorage.setItem('ads', JSON.stringify(adsFromGist));
-                    localStorage.setItem('settings', JSON.stringify(settingsFromGist));
+                    try {
+                        localStorage.setItem('recipes', JSON.stringify(recipesFromGist));
+                        localStorage.setItem('ads', JSON.stringify(adsFromGist));
+                        localStorage.setItem('settings', JSON.stringify(settingsFromGist));
+                    } catch(e) {
+                        console.warn("Could not save fetched data to local storage.", e);
+                    }
 
                 } catch (error) {
                     console.error("Fetch error:", error);
-                    setFetchError("فشل تحميل البيانات من الرابط. قد يكون الموقع غير متصل. يتم عرض البيانات المحفوظة محلياً إن وجدت.");
+                    setFetchError("فشل تحميل البيانات من الرابط. يتم عرض بيانات بديلة.");
                     
-                    // --- Fallback Logic ---
-                    // Try to load from local cache first (for returning offline visitors).
-                    const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
-                    const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
+                    let loadedFromCache = false;
+                    try {
+                        const cachedRecipesRaw = localStorage.getItem('recipes');
+                        if (cachedRecipesRaw) {
+                            const cachedRecipes = JSON.parse(cachedRecipesRaw);
+                            if (Array.isArray(cachedRecipes) && cachedRecipes.length > 0) {
+                                const cachedAdsRaw = localStorage.getItem('ads');
+                                const cachedAds = cachedAdsRaw ? JSON.parse(cachedAdsRaw) : initialAds;
+                                setRecipes(cachedRecipes);
+                                setAds(cachedAds);
+                                loadedFromCache = true;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("Could not read from cache, will use initial data.", e);
+                    }
 
-                    // If cache is empty or invalid (like for a new visitor), use the default initial recipes.
-                    if (cachedRecipes && cachedRecipes.length > 0) {
-                        setRecipes(cachedRecipes);
-                        setAds(cachedAds || initialAds); // Ensure ads also have a fallback
-                    } else {
+                    if (!loadedFromCache) {
                         setRecipes(initialRecipes);
                         setAds(initialAds);
                     }
+                    
                     setSettings(localSettings || initialSettings);
                 }
             } else {
-                // Offline mode for a completely new visitor with no configured URL
                 console.log("Offline context. Loading initial default data.");
                 setRecipes(initialRecipes);
                 setAds(initialAds);
@@ -660,7 +675,7 @@ const App: React.FC = () => {
             setIsLoading(false);
         };
         loadData();
-    }, []); // This effect runs only once on initial component mount.
+    }, []);
 
     const saveAndSyncData = useCallback(async (updatedData: {
         recipes?: Recipe[];
@@ -671,19 +686,21 @@ const App: React.FC = () => {
         const newAds = updatedData.ads ?? ads;
         let newSettings = updatedData.settings ?? settings;
 
-        // Optimistically update React state
         if (updatedData.recipes) setRecipes(updatedData.recipes);
         if (updatedData.ads) setAds(updatedData.ads);
         if (updatedData.settings) setSettings(updatedData.settings);
 
-        // ALWAYS persist to localStorage to maintain offline capability and data consistency.
-        localStorage.setItem('recipes', JSON.stringify(newRecipes));
-        localStorage.setItem('ads', JSON.stringify(newAds));
-        if (updatedData.settings) {
-            localStorage.setItem('settings', JSON.stringify(updatedData.settings));
-            newSettings = updatedData.settings; // Ensure we use the latest for sync
-        } else {
-            localStorage.setItem('settings', JSON.stringify(newSettings));
+        try {
+            localStorage.setItem('recipes', JSON.stringify(newRecipes));
+            localStorage.setItem('ads', JSON.stringify(newAds));
+            if (updatedData.settings) {
+                localStorage.setItem('settings', JSON.stringify(updatedData.settings));
+                newSettings = updatedData.settings; 
+            } else {
+                localStorage.setItem('settings', JSON.stringify(newSettings));
+            }
+        } catch (e) {
+            console.error("Could not write to local storage.", e);
         }
 
         const GIST_FILENAME = 'recipe-studio-data.json';
@@ -700,7 +717,7 @@ const App: React.FC = () => {
                 const fullDataToSync = {
                     recipes: newRecipes,
                     ads: newAds,
-                    settings: { ...newSettings, githubPat: '' }, // Never save PAT in the Gist file
+                    settings: { ...newSettings, githubPat: '' },
                 };
                 const content = JSON.stringify(fullDataToSync, null, 2);
 
@@ -935,10 +952,10 @@ const App: React.FC = () => {
                 ) : (
                     <>
                         {fetchError && (
-                            <div className="container mx-auto px-4 py-10">
-                                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md text-center">
-                                    <strong className="font-bold">حدث خطأ!</strong>
-                                    <p>{fetchError}</p>
+                            <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                                <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded-md text-center">
+                                    <strong className="font-bold">ملاحظة: </strong>
+                                    <span>{fetchError}</span>
                                 </div>
                             </div>
                         )}
