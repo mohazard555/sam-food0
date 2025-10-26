@@ -581,36 +581,60 @@ const App: React.FC = () => {
             setFetchError(null);
             
             const localSettingsRaw = localStorage.getItem('settings');
-            const localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
-            
-            // Admin's Gist URL from local storage takes precedence.
-            // Otherwise, use the public URL if it's defined.
+            const localSettings: Settings | null = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
+
+            // --- Admin Mode Logic ---
+            // If a PAT is configured, we assume it's an admin's browser.
+            // Local storage becomes the source of truth to prevent data loss.
+            if (localSettings?.githubPat) {
+                console.log("Admin context detected. Loading from local storage.");
+                const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
+                const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
+
+                setRecipes(localRecipes);
+                setAds(localAds);
+                setSettings(localSettings);
+                setIsLoading(false);
+                return; // Stop here for admin mode.
+            }
+
+            // --- Public Mode Logic ---
+            // No PAT found, so we're in public view. Fetch from Gist.
+            // Use the Gist URL from local settings if it exists, otherwise use the public URL.
             const gistUrl = localSettings?.gistUrl || PUBLIC_GIST_URL;
 
             if (gistUrl && gistUrl.startsWith('http')) {
-                // Online mode: Fetch from Gist
+                console.log(`Public context. Fetching from Gist: ${gistUrl}`);
                 try {
+                    // Fetch fresh data from the Gist
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`);
                     if (!response.ok) {
                         throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
                     }
                     const data = await response.json();
                     
-                    setRecipes(data.recipes || []);
-                    setAds(data.ads || []);
-
-                    // Use fetched settings, but preserve admin's local PAT/URL if they exist.
-                    const finalSettings = {
+                    const recipesFromGist = data.recipes || [];
+                    const adsFromGist = data.ads || [];
+                    // Ensure settings from Gist don't include sensitive info and respect public URL
+                    const settingsFromGist = {
                         ...(data.settings || initialSettings),
-                        gistUrl: localSettings?.gistUrl || data.settings?.gistUrl || PUBLIC_GIST_URL,
-                        githubPat: localSettings?.githubPat || ''
+                        gistUrl: localSettings?.gistUrl || PUBLIC_GIST_URL,
+                        githubPat: '', // Never load a PAT for public view
                     };
-                    setSettings(finalSettings);
+
+                    setRecipes(recipesFromGist);
+                    setAds(adsFromGist);
+                    setSettings(settingsFromGist);
+
+                    // Save the fetched public data to local storage for offline access
+                    localStorage.setItem('recipes', JSON.stringify(recipesFromGist));
+                    localStorage.setItem('ads', JSON.stringify(adsFromGist));
+                    localStorage.setItem('settings', JSON.stringify(settingsFromGist));
 
                 } catch (error) {
                     console.error("Fetch error:", error);
-                    setFetchError("فشل تحميل البيانات من الرابط. يرجى التأكد من صحة الرابط أو المحاولة لاحقاً.");
-                    // On error, fallback to admin's local storage or initial defaults.
+                    setFetchError("فشل تحميل البيانات من الرابط. قد يكون الموقع غير متصل. يتم عرض البيانات المحفوظة محلياً إن وجدت.");
+                    // Fallback to locally cached data for offline public user
                     const fallbackRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
                     const fallbackAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
                     setRecipes(fallbackRecipes);
@@ -618,18 +642,16 @@ const App: React.FC = () => {
                     setSettings(localSettings || initialSettings);
                 }
             } else {
-                // Offline mode: Gist is not configured at all.
-                // Load from localStorage (for returning users/admin) or use initial data.
-                const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
-                const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
-                setRecipes(localRecipes);
-                setAds(localAds);
+                // Offline mode for a completely new visitor with no configured URL
+                console.log("Offline context. Loading initial default data.");
+                setRecipes(initialRecipes);
+                setAds(initialAds);
                 setSettings(localSettings || initialSettings);
             }
             setIsLoading(false);
         };
         loadData();
-    }, []);
+    }, []); // This effect runs only once on initial component mount.
 
     const saveAndSyncData = useCallback(async (updatedData: {
         recipes?: Recipe[];
