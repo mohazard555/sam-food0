@@ -553,9 +553,8 @@ const CategoryFilter: React.FC<{
 const App: React.FC = () => {
     // --- PUBLIC DATA SOURCE CONFIGURATION ---
     // To make your recipe data public for all visitors, paste your Gist's "Raw" URL here.
-    // This will become the default data source for anyone visiting the site.
-    // The admin can still log in to manage this data.
-    // Example: 'https://gist.githubusercontent.com/your-username/12345abc/raw/...'
+    // This is the permanent link that always points to the latest version.
+    // Example: 'https://gist.githubusercontent.com/your-username/12345abc/raw/recipe-studio-data.json'
     const PUBLIC_GIST_URL = "https://gist.githubusercontent.com/mohazard555/adc1a6133164a7c1318ee91a7ca6670a/raw/recipe-studio-data.json"; 
 
     // --- STATE MANAGEMENT ---
