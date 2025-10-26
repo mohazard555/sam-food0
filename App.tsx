@@ -72,6 +72,28 @@ const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
+const getGistIdFromUrl = (url: string): string | null => {
+    if (!url) return null;
+    try {
+        const urlObject = new URL(url);
+        // pathname for https://gist.githubusercontent.com/user/gistid/raw/... is /user/gistid/raw/...
+        // pathname for https://gist.github.com/user/gistid is /user/gistid
+        const pathParts = urlObject.pathname.split('/').filter(p => p);
+        if (pathParts.length >= 2) {
+            // Gist ID is usually the second part of the path, after the username
+            const potentialId = pathParts[1];
+            // Basic validation for a Gist ID (hex string, at least 20 chars long)
+            if (/^[a-f0-9]{20,}/.test(potentialId)) {
+                return potentialId;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error("Invalid URL for Gist ID extraction", e);
+        return null;
+    }
+};
+
 // --- UI COMPONENTS ---
 const Header: React.FC<{ 
     settings: Settings;
@@ -705,11 +727,10 @@ const App: React.FC = () => {
 
         if (newSettings.gistUrl && newSettings.githubPat) {
             try {
-                const urlParts = newSettings.gistUrl.split('/');
-                const gistId = urlParts[4];
+                const gistId = getGistIdFromUrl(newSettings.gistUrl);
 
-                if (!gistId || gistId.length < 20) {
-                    throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط.");
+                if (!gistId) {
+                    throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط. تأكد من أنك نسخت رابط Gist صحيح.");
                 }
 
                 const fullDataToSync = {
@@ -738,7 +759,15 @@ const App: React.FC = () => {
                 console.log("Data synced to Gist successfully.");
             } catch (error) {
                 console.error("Gist sync error:", error);
-                alert(`خطأ في المزامنة مع Gist: ${error.message}. تم حفظ التغييرات محليًا بنجاح.`);
+                let errorMessage = "حدث خطأ غير متوقع.";
+                if (error instanceof Error) {
+                    errorMessage = error.message;
+                } else if (typeof error === 'string') {
+                    errorMessage = error;
+                } else if (error && typeof error === 'object' && 'message' in error) {
+                    errorMessage = String((error as {message: unknown}).message);
+                }
+                alert(`خطأ في المزامنة مع Gist: ${errorMessage}. تم حفظ التغييرات محليًا بنجاح.`);
             }
         }
     }, [recipes, ads, settings]);
