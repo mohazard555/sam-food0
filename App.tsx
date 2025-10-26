@@ -923,15 +923,17 @@ const App: React.FC = () => {
                     <div className="text-center py-20">
                          <p className="text-gray-600">جاري تحميل البيانات...</p>
                     </div>
-                ) : fetchError ? (
-                    <div className="container mx-auto px-4 py-10">
-                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md text-center">
-                            <strong className="font-bold">حدث خطأ!</strong>
-                            <p>{fetchError}</p>
-                        </div>
-                    </div>
                 ) : (
                     <>
+                        {fetchError && (
+                            <div className="container mx-auto px-4 py-10">
+                                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md text-center">
+                                    <strong className="font-bold">حدث خطأ!</strong>
+                                    <p>{fetchError}</p>
+                                </div>
+                            </div>
+                        )}
+                        
                         {view === 'home' && (
                             <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
                                 <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
