@@ -557,7 +557,7 @@ const App: React.FC = () => {
     // This will become the default data source for anyone visiting the site.
     // The admin can still log in to manage this data.
     // Example: 'https://gist.githubusercontent.com/your-username/12345abc/raw/...'
-    const PUBLIC_GIST_URL = ""; 
+    const PUBLIC_GIST_URL = "https://gist.githubusercontent.com/mohazard555/adc1a6133164a7c1318ee91a7ca6670a/raw/bc0f347254ae9ed1245e7ce38ed15cfbbf696f50/recipe-studio-data.json"; 
 
     // --- STATE MANAGEMENT ---
     const [recipes, setRecipes] = useState<Recipe[]>([]);
