@@ -670,6 +670,8 @@ const App: React.FC = () => {
                         errorMessage = "انتهت مهلة جلب البيانات. يتم عرض البيانات المحفوظة محلياً.";
                     } else if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
                         errorMessage = "حدث خطأ في الشبكة. يرجى التحقق من اتصالك بالإنترنت. يتم عرض البيانات المحفوظة محلياً.";
+                    } else if (error instanceof SyntaxError && error.message.includes('JSON.parse')) {
+                        errorMessage = `خطأ في تحليل البيانات من الخادم: ${error.message}. يتم عرض البيانات المحفوظة محلياً.`;
                     } else if (error instanceof Error) {
                          errorMessage = `${error.message}. يتم عرض البيانات المحفوظة محلياً.`;
                     } else {
@@ -714,54 +716,43 @@ const App: React.FC = () => {
         loadData();
     }, []);
 
-    const saveAndSyncData = useCallback(async (updatedData: {
-        recipes?: Recipe[];
-        ads?: Ad[];
-        settings?: Settings;
+    const saveAndSyncData = async (dataToSync: {
+        recipes: Recipe[];
+        ads: Ad[];
+        settings: Settings;
     }) => {
-        const newRecipes = updatedData.recipes ?? recipes;
-        const newAds = updatedData.ads ?? ads;
-        let newSettings = updatedData.settings ?? settings;
-
-        if (updatedData.recipes) setRecipes(updatedData.recipes);
-        if (updatedData.ads) setAds(updatedData.ads);
-        if (updatedData.settings) setSettings(updatedData.settings);
+        const { recipes, ads, settings } = dataToSync;
 
         try {
-            localStorage.setItem('recipes', JSON.stringify(newRecipes));
-            localStorage.setItem('ads', JSON.stringify(newAds));
-            if (updatedData.settings) {
-                localStorage.setItem('settings', JSON.stringify(updatedData.settings));
-                newSettings = updatedData.settings; 
-            } else {
-                 localStorage.setItem('settings', JSON.stringify(newSettings));
-            }
+            localStorage.setItem('recipes', JSON.stringify(recipes));
+            localStorage.setItem('ads', JSON.stringify(ads));
+            localStorage.setItem('settings', JSON.stringify(settings));
         } catch (e) {
             console.error("Could not write to local storage.", e);
         }
 
         const GIST_FILENAME = 'recipe-studio-data.json';
 
-        if (newSettings.gistUrl && newSettings.githubPat) {
+        if (settings.gistUrl && settings.githubPat) {
             try {
-                const gistId = getGistIdFromUrl(newSettings.gistUrl);
+                const gistId = getGistIdFromUrl(settings.gistUrl);
 
                 if (!gistId) {
                     throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط. تأكد من أنك نسخت رابط Gist صحيح.");
                 }
 
                 const fullDataToSync = {
-                    recipes: newRecipes,
-                    ads: newAds,
+                    recipes,
+                    ads,
                     // Never sync the PAT to the public Gist file
-                    settings: { ...newSettings, githubPat: '' },
+                    settings: { ...settings, githubPat: '' },
                 };
                 const content = JSON.stringify(fullDataToSync, null, 2);
 
                 const response = await fetch(`https://api.github.com/gists/${gistId}`, {
                     method: 'PATCH',
                     headers: {
-                        'Authorization': `token ${newSettings.githubPat}`,
+                        'Authorization': `token ${settings.githubPat}`,
                         'Accept': 'application/vnd.github.v3+json',
                     },
                     body: JSON.stringify({
@@ -799,26 +790,26 @@ const App: React.FC = () => {
                 alert(`خطأ في المزامنة: ${errorMessage}. تم حفظ التغييرات محليًا.`);
             }
         }
-    }, [recipes, ads, settings]);
+    };
+
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
     const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id'>, id?: string) => {
-        let updatedRecipes;
-        if (id) {
-            updatedRecipes = recipes.map(r => r.id === id ? { ...r, ...recipeData } : r);
-        } else {
-            const newRecipe: Recipe = { id: Date.now().toString(), ...recipeData };
-            updatedRecipes = [newRecipe, ...recipes];
-        }
-        await saveAndSyncData({ recipes: updatedRecipes });
+        const updatedRecipes = id
+            ? recipes.map(r => (r.id === id ? { ...r, ...recipeData } : r))
+            : [{ id: Date.now().toString(), ...recipeData }, ...recipes];
+
+        setRecipes(updatedRecipes);
+        await saveAndSyncData({ recipes: updatedRecipes, ads, settings });
         setModalState(null);
     };
 
     const handleDeleteRecipe = async (id: string) => {
         if (window.confirm('هل أنت متأكد من حذف هذه الوصفة؟')) {
             const updatedRecipes = recipes.filter(r => r.id !== id);
-            await saveAndSyncData({ recipes: updatedRecipes });
+            setRecipes(updatedRecipes);
+            await saveAndSyncData({ recipes: updatedRecipes, ads, settings });
         }
     };
     
@@ -852,26 +843,27 @@ const App: React.FC = () => {
 
     // ADS
     const handleSaveAd = async (adData: Omit<Ad, 'id'>, id?: string) => {
-        let updatedAds;
-        if (id) {
-            updatedAds = ads.map(a => a.id === id ? { ...a, ...adData } : a);
-        } else {
-            const newAd: Ad = { id: Date.now().toString(), ...adData };
-            updatedAds = [newAd, ...ads];
-        }
-        await saveAndSyncData({ ads: updatedAds });
+        const updatedAds = id
+            ? ads.map(a => (a.id === id ? { ...a, ...adData } : a))
+            : [{ id: Date.now().toString(), ...adData }, ...ads];
+        
+        setAds(updatedAds);
+        await saveAndSyncData({ recipes, ads: updatedAds, settings });
         setModalState(null);
     };
 
     const handleDeleteAd = async (id: string) => {
         const updatedAds = ads.filter(a => a.id !== id);
-        await saveAndSyncData({ ads: updatedAds });
+        setAds(updatedAds);
+        await saveAndSyncData({ recipes, ads: updatedAds, settings });
     };
 
     // SETTINGS
     const handleSaveSettings = async (newSettings: Settings) => {
-        await saveAndSyncData({ settings: newSettings });
+        setSettings(newSettings);
+        await saveAndSyncData({ recipes, ads, settings: newSettings });
     };
+
 
     // AUTHENTICATION
     const handleLogin = (username: string, password: string) => {
@@ -919,14 +911,25 @@ const App: React.FC = () => {
         reader.onload = async (event) => {
             try {
                 const data = JSON.parse(event.target?.result as string);
-                const dataToSync: { recipes?: Recipe[], ads?: Ad[], settings?: Settings } = {};
+                
+                const recipesToImport = data.recipes || recipes;
+                const adsToImport = data.ads || ads;
+                const settingsToImport = data.settings ? { ...settings, ...data.settings } : settings;
 
-                if (data.recipes) { dataToSync.recipes = data.recipes; }
-                if (data.ads) { dataToSync.ads = data.ads; }
-                if (data.settings) { dataToSync.settings = { ...settings, ...data.settings }; }
-                if (data.adminCredentials) setAdminCredentials(data.adminCredentials);
+                if (data.adminCredentials) {
+                    setAdminCredentials(data.adminCredentials);
+                }
+                
+                setRecipes(recipesToImport);
+                setAds(adsToImport);
+                setSettings(settingsToImport);
 
-                await saveAndSyncData(dataToSync);
+                await saveAndSyncData({ 
+                    recipes: recipesToImport, 
+                    ads: adsToImport, 
+                    settings: settingsToImport 
+                });
+
                 alert("تم استيراد البيانات ومزامنتها بنجاح!");
             } catch (error) {
                 alert("حدث خطأ أثناء قراءة الملف. تأكد من أنه ملف تصدير صحيح.");
@@ -972,7 +975,7 @@ const App: React.FC = () => {
             default:
                 return null;
         }
-    }, [modalState, recipes, ads, settings.youtubeSubscribeLink, isSubscribed, saveAndSyncData]);
+    }, [modalState, settings.youtubeSubscribeLink, isSubscribed, recipes, ads, settings, adminCredentials]);
     
     const modalTitle = useMemo(() => {
         if (!modalState) return '';
