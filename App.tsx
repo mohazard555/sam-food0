@@ -816,20 +816,20 @@ const App: React.FC = () => {
 
                         if (files?.[GIST_V2_MANIFEST]) {
                             setIsLegacyDataFormat(false);
-                            const manifestContent = await fetch(`${files[GIST_V2_MANIFEST].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json());
-                            const settingsContent = await fetch(`${files[GIST_V2_SETTINGS].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json());
-                            const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json()) : Promise.resolve(null));
-                            const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json()) : Promise.resolve(null));
+                            const manifestContent = await fetch(`${files[GIST_V2_MANIFEST].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json());
+                            const settingsContent = await fetch(`${files[GIST_V2_SETTINGS].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json());
+                            const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json()) : Promise.resolve(null));
+                            const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json()) : Promise.resolve(null));
                             recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
                             adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
                             settingsFromGist = settingsContent;
                         } else if (files?.[GIST_V1_RECIPES]) {
                             setIsLegacyDataFormat(true);
-                            const fetchJson = (filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json()) : Promise.resolve(null);
+                            const fetchJson = (filename: string) => files[filename] ? fetch(`${files[filename].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json()) : Promise.resolve(null);
                             [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchJson(GIST_V1_SETTINGS), fetchJson(GIST_V1_RECIPES), fetchJson(GIST_V1_ADS)]);
                         } else if (files?.[GIST_V0_SINGLE_FILE]) {
                             setIsLegacyDataFormat(true);
-                            const data = await fetch(`${files[GIST_V0_SINGLE_FILE].raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => res.json());
+                            const data = await fetch(`${files[GIST_V0_SINGLE_FILE].raw_url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => res.json());
                             recipesFromGist = data.recipes || []; adsFromGist = data.ads || []; settingsFromGist = data.settings || {};
                         }
                         
