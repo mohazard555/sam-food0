@@ -190,6 +190,20 @@ const getGistIdFromUrl = (url: string): string | null => {
     }
 };
 
+const fetchJsonWithCacheBust = async (url: string) => {
+    const res = await fetch(`${url}?_=${new Date().getTime()}`, { cache: 'reload' });
+    if (!res.ok) throw new Error(`فشل في جلب ${url}`);
+
+    const contentLength = res.headers.get('Content-Length');
+    // Set a 25MB limit to prevent browser crashes on large JSON parsing.
+    const MAX_SIZE_BYTES = 25 * 1024 * 1024;
+    if (contentLength && parseInt(contentLength, 10) > MAX_SIZE_BYTES) {
+        throw new Error(`حجم ملف البيانات (${(parseInt(contentLength, 10) / 1024 / 1024).toFixed(1)}MB) كبير جدًا ولا يمكن معالجته.`);
+    }
+
+    return res.json();
+};
+
 // --- UI COMPONENTS ---
 const Header: React.FC<{ 
     settings: Settings;
@@ -744,47 +758,88 @@ const App: React.FC = () => {
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [syncError, setSyncError] = useState<string | null>(null);
 
-
-    // New state for data format migration
     const [isLegacyDataFormat, setIsLegacyDataFormat] = useState(false);
     const [existingGistFilenames, setExistingGistFilenames] = useState<string[]>([]);
 
-    // --- DATA LOADING & SAVING ---
+    // --- DATA HANDLING ---
+
+    const fetchAndApplyGistData = async (gistUrl: string, localPat: string) => {
+        const gistId = getGistIdFromUrl(gistUrl);
+        if (!gistId) throw new Error("الرابط Gist المحدد في الإعدادات غير صالح.");
+        
+        console.log(`Fetching Gist content from ID: ${gistId}`);
+        const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, { cache: 'reload' });
+        if (!gistDetailsResponse.ok) throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
+        
+        const gistData = await gistDetailsResponse.json();
+        const remoteTimestamp = gistData.updated_at;
+        const files = gistData?.files;
+        if (!files) throw new Error("Gist was found, but it appears to be empty.");
+
+        setExistingGistFilenames(Object.keys(files));
+        
+        let recipesFromGist, adsFromGist, settingsFromGist;
+        const GIST_V0_SINGLE_FILE = 'recipe-studio-data.json';
+        const GIST_V1_SETTINGS = 'settings.json';
+        const GIST_V1_RECIPES = 'recipes.json';
+        const GIST_V1_ADS = 'ads.json';
+        const GIST_V2_MANIFEST = '_manifest.json';
+        const GIST_V2_SETTINGS = '_settings.json';
+        
+        if (files?.[GIST_V2_MANIFEST]) {
+            setIsLegacyDataFormat(false);
+            const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url);
+            const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url);
+            const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
+            const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
+            recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
+            adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
+            settingsFromGist = settingsContent;
+        } else if (files?.[GIST_V1_RECIPES]) {
+            setIsLegacyDataFormat(true);
+            const fetchFile = (filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null);
+            [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchFile(GIST_V1_SETTINGS), fetchFile(GIST_V1_RECIPES), fetchFile(GIST_V1_ADS)]);
+        } else if (files?.[GIST_V0_SINGLE_FILE]) {
+            setIsLegacyDataFormat(true);
+            const data = await fetchJsonWithCacheBust(files[GIST_V0_SINGLE_FILE].raw_url);
+            recipesFromGist = data.recipes;
+            adsFromGist = data.ads;
+            settingsFromGist = data.settings;
+        } else {
+            throw new Error("Could not find any recognizable data files in the Gist.");
+        }
+        
+        const finalRecipes = recipesFromGist ?? [];
+        const finalAds = adsFromGist ?? [];
+        const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl, githubPat: localPat };
+
+        setRecipes(finalRecipes);
+        setAds(finalAds);
+        setSettings(finalSettings);
+
+        localStorage.setItem('recipes', JSON.stringify(finalRecipes));
+        localStorage.setItem('ads', JSON.stringify(finalAds));
+        localStorage.setItem('settings', JSON.stringify(finalSettings));
+        localStorage.setItem('dataTimestamp', remoteTimestamp);
+
+        console.log("Successfully fetched and applied remote Gist data.");
+    };
+
     useEffect(() => {
-        const fetchJsonWithCacheBust = async (url: string) => {
-            const res = await fetch(`${url}?_=${new Date().getTime()}`, { cache: 'reload' });
-            if (!res.ok) throw new Error(`فشل في جلب ${url}`);
-
-            const contentLength = res.headers.get('Content-Length');
-            // Set a 25MB limit to prevent browser crashes on large JSON parsing.
-            const MAX_SIZE_BYTES = 25 * 1024 * 1024;
-            if (contentLength && parseInt(contentLength, 10) > MAX_SIZE_BYTES) {
-                throw new Error(`حجم ملف البيانات (${(parseInt(contentLength, 10) / 1024 / 1024).toFixed(1)}MB) كبير جدًا ولا يمكن معالجته.`);
-            }
-
-            return res.json();
-        };
-
         const loadData = async () => {
             setIsLoading(true);
             setFetchError(null);
             setSyncError(null);
 
-            // Part 1: Load local data first for a fast UI, or use defaults
-            let localTimestamp: string | null = null;
             let localSettings: Settings | null = null;
             try {
                 const settingsRaw = localStorage.getItem('settings');
-                const recipesRaw = localStorage.getItem('recipes');
-                const adsRaw = localStorage.getItem('ads');
-                
                 if (settingsRaw) localSettings = JSON.parse(settingsRaw);
                 
-                if (recipesRaw) setRecipes(JSON.parse(recipesRaw)); else setRecipes(initialRecipes);
-                if (adsRaw) setAds(JSON.parse(adsRaw)); else setAds(initialAds);
-                if (localSettings) setSettings(localSettings); else setSettings(initialSettings);
+                setRecipes(JSON.parse(localStorage.getItem('recipes') || 'null') ?? initialRecipes);
+                setAds(JSON.parse(localStorage.getItem('ads') || 'null') ?? initialAds);
+                setSettings(localSettings ?? initialSettings);
                 
-                localTimestamp = localStorage.getItem('dataTimestamp');
                 console.log("Loaded initial data from local storage or defaults.");
             } catch (e) {
                 console.warn("Could not read local storage, using initial data.", e);
@@ -792,95 +847,42 @@ const App: React.FC = () => {
                 setAds(initialAds);
                 setSettings(initialSettings);
             }
-            setIsLoading(false); // UI is now populated and responsive
+            setIsLoading(false);
 
-            // Part 2: Reconcile with remote data in the background
             const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
-            const localPat = localSettings?.githubPat || '';
-
             if (!gistUrl) {
                 console.log("No Gist URL configured. App is in local-only mode.");
                 return;
             }
-            
-            const gistId = getGistIdFromUrl(gistUrl);
-            if (!gistId) {
-                setFetchError("الرابط Gist المحدد في الإعدادات غير صالح.");
-                return;
-            }
 
             try {
-                console.log(`Checking for remote updates from Gist ID: ${gistId}`);
+                const localTimestamp = localStorage.getItem('dataTimestamp');
+                const localPat = localSettings?.githubPat || '';
+                const gistId = getGistIdFromUrl(gistUrl);
+                if (!gistId) {
+                    setFetchError("الرابط Gist المحدد في الإعدادات غير صالح.");
+                    return;
+                }
+                
                 const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, { cache: 'reload' });
                 if (!gistDetailsResponse.ok) throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
                 
                 const gistData = await gistDetailsResponse.json();
                 const remoteTimestamp = gistData.updated_at;
 
-                // Decision logic:
                 if (localTimestamp && remoteTimestamp && new Date(localTimestamp) > new Date(remoteTimestamp)) {
                     console.warn("Local data is newer than remote. Keeping local changes.");
                     setSyncError("لديك تغييرات محلية لم تتم مزامنتها. يرجى التحقق من إعدادات المزامنة لحفظها.");
-                    return; // Keep local data, we're done.
+                    return;
                 }
 
-                if (localTimestamp && remoteTimestamp && new Date(remoteTimestamp) <= new Date(localTimestamp)) {
-                    console.log("Local data is already up-to-date with remote.");
-                    return; // Data is in sync, no need to fetch content.
-                }
-
-                // If we reach here, remote is newer or local doesn't exist. Fetch content.
-                console.log("Remote data is newer. Fetching Gist content...");
-                const files = gistData?.files;
-                if (!files) throw new Error("Gist was found, but it appears to be empty.");
-
-                setExistingGistFilenames(Object.keys(files));
-                
-                let recipesFromGist, adsFromGist, settingsFromGist;
-                const GIST_V0_SINGLE_FILE = 'recipe-studio-data.json';
-                const GIST_V1_SETTINGS = 'settings.json';
-                const GIST_V1_RECIPES = 'recipes.json';
-                const GIST_V1_ADS = 'ads.json';
-                const GIST_V2_MANIFEST = '_manifest.json';
-                const GIST_V2_SETTINGS = '_settings.json';
-                
-                if (files?.[GIST_V2_MANIFEST]) {
-                    setIsLegacyDataFormat(false);
-                    const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url);
-                    const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url);
-                    const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
-                    const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
-                    recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
-                    adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
-                    settingsFromGist = settingsContent;
-                } else if (files?.[GIST_V1_RECIPES]) {
-                    setIsLegacyDataFormat(true);
-                    const fetchFile = (filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null);
-                    [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchFile(GIST_V1_SETTINGS), fetchFile(GIST_V1_RECIPES), fetchFile(GIST_V1_ADS)]);
-                } else if (files?.[GIST_V0_SINGLE_FILE]) {
-                    setIsLegacyDataFormat(true);
-                    const data = await fetchJsonWithCacheBust(files[GIST_V0_SINGLE_FILE].raw_url);
-                    recipesFromGist = data.recipes;
-                    adsFromGist = data.ads;
-                    settingsFromGist = data.settings;
+                if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
+                    console.log("Remote data is newer or local is missing. Fetching Gist content...");
+                    await fetchAndApplyGistData(gistUrl, localPat);
                 } else {
-                    throw new Error("Could not find any recognizable data files in the Gist.");
+                    console.log("Local data is already up-to-date with remote.");
                 }
-                
-                const finalRecipes = recipesFromGist ?? [];
-                const finalAds = adsFromGist ?? [];
-                const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl: gistUrl, githubPat: localPat };
 
-                setRecipes(finalRecipes);
-                setAds(finalAds);
-                setSettings(finalSettings);
-
-                localStorage.setItem('recipes', JSON.stringify(finalRecipes));
-                localStorage.setItem('ads', JSON.stringify(finalAds));
-                localStorage.setItem('settings', JSON.stringify(finalSettings));
-                localStorage.setItem('dataTimestamp', remoteTimestamp);
-
-                console.log("Successfully fetched and updated data from remote Gist.");
             } catch (error) {
                 let errorMessage = "فشل تحميل البيانات من الرابط.";
                 if (error instanceof Error) {
@@ -902,14 +904,12 @@ const App: React.FC = () => {
         settings: Settings;
     }) => {
         const { recipes, ads, settings } = dataToSync;
-        const dataTimestamp = new Date().toISOString();
-
-        // ALWAYS save to local storage first and update the timestamp
+        
         try {
             localStorage.setItem('recipes', JSON.stringify(recipes));
             localStorage.setItem('ads', JSON.stringify(ads));
             localStorage.setItem('settings', JSON.stringify(settings));
-            localStorage.setItem('dataTimestamp', dataTimestamp); // IMPORTANT: Update timestamp on EVERY save
+            localStorage.setItem('dataTimestamp', new Date().toISOString());
         } catch (e) {
             console.error("Could not write to local storage.", e);
         }
@@ -925,14 +925,8 @@ const App: React.FC = () => {
             const gistId = getGistIdFromUrl(settings.gistUrl);
             if (!gistId) throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط. تأكد من أنك نسخت رابط Gist صحيح.");
             
-            console.log("Preparing to sync data with new V2 multi-file format.");
-            
-            // Fetch latest Gist details to get current file list for accurate cleanup
             const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}`, {
-                headers: {
-                    'Authorization': `token ${settings.githubPat}`,
-                    'Accept': 'application/vnd.github.v3+json',
-                },
+                headers: { 'Authorization': `token ${settings.githubPat}`, 'Accept': 'application/vnd.github.v3+json' },
                 cache: 'no-store',
             });
 
@@ -945,51 +939,41 @@ const App: React.FC = () => {
             const gistData = await gistDetailsResponse.json();
             const currentRemoteFiles = Object.keys(gistData.files || {});
 
-            const GIST_V2_MANIFEST = '_manifest.json';
-            const GIST_V2_SETTINGS = '_settings.json';
+            const filesToSync: { [key: string]: { content: string } | null } = {};
+            const recipeFiles: string[] = [];
+            const adFiles: string[] = [];
             const recipeFilePrefix = 'recipe_';
             const adFilePrefix = 'ad_';
 
-            const filesToSync: { [key: string]: { content: string } | null } = {};
+            filesToSync['_settings.json'] = { content: JSON.stringify({ ...settings, githubPat: '' }, null, 2) };
 
-            filesToSync[GIST_V2_SETTINGS] = { content: JSON.stringify({ ...settings, githubPat: '' }, null, 2) };
-
-            const recipeFiles: string[] = [];
-            const adFiles: string[] = [];
-
-            for (const recipe of recipes) {
+            recipes.forEach(recipe => {
                 const filename = `${recipeFilePrefix}${recipe.id}.json`;
                 recipeFiles.push(filename);
                 filesToSync[filename] = { content: JSON.stringify(recipe, null, 2) };
-            }
-            for (const ad of ads) {
+            });
+            ads.forEach(ad => {
                 const filename = `${adFilePrefix}${ad.id}.json`;
                 adFiles.push(filename);
                 filesToSync[filename] = { content: JSON.stringify(ad, null, 2) };
-            }
+            });
 
-            const manifest = { recipeFiles, adFiles };
-            filesToSync[GIST_V2_MANIFEST] = { content: JSON.stringify(manifest, null, 2) };
+            filesToSync['_manifest.json'] = { content: JSON.stringify({ recipeFiles, adFiles }, null, 2) };
             
             const currentFileSet = new Set(Object.keys(filesToSync));
             const legacyFileNames = ['recipe-studio-data.json', 'settings.json', 'recipes.json', 'ads.json'];
 
-            for (const existingFile of currentRemoteFiles) {
+            currentRemoteFiles.forEach(existingFile => {
                 const isLegacyFile = legacyFileNames.includes(existingFile);
                 const isOrphanedDataFile = (existingFile.startsWith(recipeFilePrefix) || existingFile.startsWith(adFilePrefix)) && !currentFileSet.has(existingFile);
-
                 if (isLegacyFile || isOrphanedDataFile) {
-                    console.log(`Marking old/orphaned file for deletion: ${existingFile}`);
                     filesToSync[existingFile] = null;
                 }
-            }
+            });
 
             const response = await fetch(`https://api.github.com/gists/${gistId}`, {
                 method: 'PATCH',
-                headers: {
-                    'Authorization': `token ${settings.githubPat}`,
-                    'Accept': 'application/vnd.github.v3+json',
-                },
+                headers: { 'Authorization': `token ${settings.githubPat}`, 'Accept': 'application/vnd.github.v3+json' },
                 body: JSON.stringify({
                     description: `Recipe Studio Data - Last updated ${new Date().toISOString()}`,
                     files: filesToSync,
@@ -997,48 +981,28 @@ const App: React.FC = () => {
             });
 
             if (!response.ok) {
-                let errorDetail = `Status: ${response.status} ${response.statusText}`;
+                let errorDetail;
                 try {
                     const errorData = await response.json();
-                    errorDetail = errorData?.message || JSON.stringify(errorData);
-                     if (response.status === 401) {
-                        errorDetail = "رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية.";
-                    } else if (response.status === 404) {
-                        errorDetail = "لم يتم العثور على Gist. تحقق من صحة الرابط.";
-                    } else if (response.status === 422) {
-                        errorDetail = "Validation Failed. قد يكون حجم أحد العناصر (وصفة أو إعلان) كبيراً جداً.";
-                    }
+                    if (response.status === 401) errorDetail = "رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية.";
+                    else if (response.status === 404) errorDetail = "لم يتم العثور على Gist. تحقق من صحة الرابط.";
+                    else if (response.status === 422) errorDetail = "فشل التحقق. قد يكون حجم أحد العناصر (وصفة أو إعلان) كبيراً جداً.";
+                    else errorDetail = errorData?.message || JSON.stringify(errorData);
                 } catch (e) {
-                    console.warn("Could not parse Gist error response as JSON");
+                    errorDetail = `Status: ${response.status} ${response.statusText}`;
                 }
                 throw new Error(`فشل تحديث Gist: ${errorDetail}`);
             }
             
             const gistResponse = await response.json();
-            // Align local timestamp with the server's response for maximum accuracy
             localStorage.setItem('dataTimestamp', gistResponse.updated_at);
-            
-            // Update state with the definitive list of files from the server response
-            if (gistResponse.files) {
-                setExistingGistFilenames(Object.keys(gistResponse.files));
-            }
+            if (gistResponse.files) setExistingGistFilenames(Object.keys(gistResponse.files));
 
             console.log("Data synced to Gist successfully.");
-            if (isLegacyDataFormat) {
-                setIsLegacyDataFormat(false);
-                alert("تم تحديث نظام المزامنة بنجاح! تم حل مشكلة حجم البيانات بشكل دائم.");
-            }
         } catch (error) {
-            console.error("Gist sync error:", error);
-            let errorMessage: string;
-            if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
-                errorMessage = "فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.";
-            } else if (error instanceof Error) {
-                errorMessage = error.message;
-            } else {
-                errorMessage = "حدث خطأ غير متوقع أثناء المزامنة.";
-            }
+            let errorMessage = error instanceof Error ? error.message : "حدث خطأ غير متوقع أثناء المزامنة.";
             setSyncError(`خطأ في المزامنة: ${errorMessage}. تم حفظ التغييرات محليًا.`);
+            console.error("Gist sync error:", error);
         }
     };
 
@@ -1196,6 +1160,27 @@ const App: React.FC = () => {
         reader.readAsText(file);
     };
 
+    const handleForceReload = async () => {
+        if (!window.confirm("هل أنت متأكد؟ سيتم تجاهل جميع التغييرات المحلية التي لم تتم مزامنتها واستبدالها بالبيانات الموجودة حاليًا على الخادم.")) {
+            return;
+        }
+        
+        setIsLoading(true);
+        setFetchError(null);
+        setSyncError(null);
+        
+        try {
+            await fetchAndApplyGistData(settings.gistUrl, settings.githubPat);
+            alert("تمت إعادة تحميل البيانات من الخادم بنجاح.");
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "حدث خطأ غير متوقع.";
+            setFetchError(`فشل فرض إعادة التحميل: ${errorMessage}`);
+            console.error("Force reload error:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
 
     // --- MEMOIZED VALUES ---
     const filteredRecipes = useMemo(() => {
@@ -1282,12 +1267,18 @@ const App: React.FC = () => {
                                             <strong className="font-bold">خطأ في المزامنة: </strong>
                                             <span>{syncError}</span>
                                         </div>
-                                        <div className="flex-shrink-0 flex items-center gap-3">
+                                        <div className="flex-shrink-0 flex flex-wrap items-center gap-2">
                                             <button
                                                 onClick={() => saveAndSyncData({ recipes, ads, settings })}
                                                 className="px-3 py-1 border border-red-700 rounded-md text-sm font-medium text-red-700 hover:bg-red-200 whitespace-nowrap"
                                             >
                                                 إعادة المحاولة
+                                            </button>
+                                            <button
+                                                onClick={handleForceReload}
+                                                className="px-3 py-1 border border-yellow-700 rounded-md text-sm font-medium text-yellow-800 bg-yellow-200 hover:bg-yellow-300 whitespace-nowrap"
+                                            >
+                                                تحميل من الخادم
                                             </button>
                                             <button onClick={() => setSyncError(null)} className="text-red-800 hover:text-red-600">
                                                 <CloseIcon className="w-5 h-5" />
