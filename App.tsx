@@ -753,7 +753,7 @@ const App: React.FC = () => {
     useEffect(() => {
         const fetchJsonWithCacheBust = async (url: string) => {
             const res = await fetch(`${url}?_=${new Date().getTime()}`, { cache: 'reload' });
-            if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+            if (!res.ok) throw new Error(`فشل في جلب ${url}`);
 
             const contentLength = res.headers.get('Content-Length');
             // Set a 25MB limit to prevent browser crashes on large JSON parsing.
@@ -769,144 +769,149 @@ const App: React.FC = () => {
             setIsLoading(true);
             setFetchError(null);
             setSyncError(null);
-
-            // Determine the Gist URL from local storage first, or initial settings as a fallback.
-            let gistUrl: string;
-            let localPat: string = '';
+            let remoteFetchAttempted = false;
+            
             try {
-                const settingsRaw = localStorage.getItem('settings');
-                if (settingsRaw) {
-                    const localSettings = JSON.parse(settingsRaw);
-                    gistUrl = localSettings.gistUrl;
-                    localPat = localSettings.githubPat || '';
-                } else {
+                // Determine the Gist URL from local storage first, or initial settings as a fallback.
+                let gistUrl: string;
+                let localPat: string = '';
+                try {
+                    const settingsRaw = localStorage.getItem('settings');
+                    if (settingsRaw) {
+                        const localSettings = JSON.parse(settingsRaw);
+                        gistUrl = localSettings.gistUrl;
+                        localPat = localSettings.githubPat || '';
+                    } else {
+                        gistUrl = initialSettings.gistUrl;
+                    }
+                } catch {
                     gistUrl = initialSettings.gistUrl;
                 }
-            } catch {
-                gistUrl = initialSettings.gistUrl;
-            }
 
-            const gistId = getGistIdFromUrl(gistUrl);
-            let remoteFetchSuccess = false;
+                const gistId = getGistIdFromUrl(gistUrl);
+                let shouldUseRemoteData = true;
 
-            // --- Step 1: Attempt to fetch from remote (Gist) first ---
-            if (gistId) {
-                console.log(`Attempting to fetch remote data from Gist ID: ${gistId}`);
-                let timeoutId: number | undefined;
-                try {
-                    const controller = new AbortController();
-                    timeoutId = setTimeout(() => controller.abort(), 45000);
-
+                if (gistId) {
+                    remoteFetchAttempted = true;
+                    console.log(`Attempting to fetch remote data from Gist ID: ${gistId}`);
+                    
                     const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
-                        signal: controller.signal,
                         cache: 'reload',
                         headers: { 'Accept': 'application/vnd.github.v3+json' }
                     });
-
                     if (!gistDetailsResponse.ok) throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
-
+                    
                     const gistData = await gistDetailsResponse.json();
-                    clearTimeout(timeoutId);
-                    timeoutId = undefined;
-
                     const remoteTimestamp = gistData.updated_at;
-                    const files = gistData?.files;
+                    const localTimestamp = localStorage.getItem('dataTimestamp');
 
-                    if (!files) throw new Error("Gist was found, but it appears to be empty.");
-
-                    setExistingGistFilenames(Object.keys(files));
-                    
-                    let recipesFromGist, adsFromGist, settingsFromGist;
-                    const GIST_V0_SINGLE_FILE = 'recipe-studio-data.json';
-                    const GIST_V1_SETTINGS = 'settings.json';
-                    const GIST_V1_RECIPES = 'recipes.json';
-                    const GIST_V1_ADS = 'ads.json';
-                    const GIST_V2_MANIFEST = '_manifest.json';
-                    const GIST_V2_SETTINGS = '_settings.json';
-                    
-                    if (files?.[GIST_V2_MANIFEST]) {
-                        setIsLegacyDataFormat(false);
-                        const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url);
-                        const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url);
-                        const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
-                        const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
-                        recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
-                        adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
-                        settingsFromGist = settingsContent;
-                    } else if (files?.[GIST_V1_RECIPES]) {
-                        setIsLegacyDataFormat(true);
-                        const fetchFile = (filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null);
-                        [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchFile(GIST_V1_SETTINGS), fetchFile(GIST_V1_RECIPES), fetchFile(GIST_V1_ADS)]);
-                    } else if (files?.[GIST_V0_SINGLE_FILE]) {
-                        setIsLegacyDataFormat(true);
-                        const data = await fetchJsonWithCacheBust(files[GIST_V0_SINGLE_FILE].raw_url);
-                        recipesFromGist = data.recipes;
-                        adsFromGist = data.ads;
-                        settingsFromGist = data.settings;
-                    } else {
-                        throw new Error("Could not find any recognizable data files in the Gist.");
+                    if (localTimestamp && remoteTimestamp && new Date(localTimestamp) > new Date(remoteTimestamp)) {
+                        console.warn("Local data is newer than remote. Using local data and skipping remote fetch.");
+                        setSyncError("لديك تغييرات محلية لم تتم مزامنتها. يرجى التحقق من إعدادات المزامنة لحفظها.");
+                        shouldUseRemoteData = false;
                     }
-                    
-                    // Use fetched data, default to empty arrays if keys are missing from Gist data
-                    const finalRecipes = recipesFromGist ?? [];
-                    const finalAds = adsFromGist ?? [];
-                    // Preserve Gist URL and local PAT, but take other settings from remote
-                    const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl: gistUrl, githubPat: localPat };
 
-                    setRecipes(finalRecipes);
-                    setAds(finalAds);
-                    setSettings(finalSettings);
+                    if (shouldUseRemoteData) {
+                        const files = gistData?.files;
+                        if (!files) throw new Error("Gist was found, but it appears to be empty.");
+    
+                        setExistingGistFilenames(Object.keys(files));
+                        
+                        let recipesFromGist, adsFromGist, settingsFromGist;
+                        const GIST_V0_SINGLE_FILE = 'recipe-studio-data.json';
+                        const GIST_V1_SETTINGS = 'settings.json';
+                        const GIST_V1_RECIPES = 'recipes.json';
+                        const GIST_V1_ADS = 'ads.json';
+                        const GIST_V2_MANIFEST = '_manifest.json';
+                        const GIST_V2_SETTINGS = '_settings.json';
+                        
+                        if (files?.[GIST_V2_MANIFEST]) {
+                            setIsLegacyDataFormat(false);
+                            const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url);
+                            const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url);
+                            const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
+                            const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null));
+                            recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
+                            adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
+                            settingsFromGist = settingsContent;
+                        } else if (files?.[GIST_V1_RECIPES]) {
+                            setIsLegacyDataFormat(true);
+                            const fetchFile = (filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url) : Promise.resolve(null);
+                            [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchFile(GIST_V1_SETTINGS), fetchFile(GIST_V1_RECIPES), fetchFile(GIST_V1_ADS)]);
+                        } else if (files?.[GIST_V0_SINGLE_FILE]) {
+                            setIsLegacyDataFormat(true);
+                            const data = await fetchJsonWithCacheBust(files[GIST_V0_SINGLE_FILE].raw_url);
+                            recipesFromGist = data.recipes;
+                            adsFromGist = data.ads;
+                            settingsFromGist = data.settings;
+                        } else {
+                            throw new Error("Could not find any recognizable data files in the Gist.");
+                        }
+                        
+                        const finalRecipes = recipesFromGist ?? [];
+                        const finalAds = adsFromGist ?? [];
+                        const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl: gistUrl, githubPat: localPat };
 
-                    // Update local storage with the fresh data
-                    localStorage.setItem('recipes', JSON.stringify(finalRecipes));
-                    localStorage.setItem('ads', JSON.stringify(finalAds));
-                    localStorage.setItem('settings', JSON.stringify(finalSettings));
-                    localStorage.setItem('dataTimestamp', remoteTimestamp);
+                        setRecipes(finalRecipes);
+                        setAds(finalAds);
+                        setSettings(finalSettings);
 
-                    console.log("Successfully loaded and synced data from remote Gist.");
-                    remoteFetchSuccess = true;
+                        localStorage.setItem('recipes', JSON.stringify(finalRecipes));
+                        localStorage.setItem('ads', JSON.stringify(finalAds));
+                        localStorage.setItem('settings', JSON.stringify(finalSettings));
+                        localStorage.setItem('dataTimestamp', remoteTimestamp);
 
-                } catch (error) {
-                    if (timeoutId) clearTimeout(timeoutId);
-                    let errorMessage = "فشل تحميل البيانات من الرابط.";
-                    if (error instanceof Error) {
-                        if (error.name === 'AbortError') errorMessage = "انتهت مهلة جلب البيانات.";
-                        else if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
-                        else errorMessage = error.message;
+                        console.log("Successfully loaded and synced data from remote Gist.");
                     }
-                    setFetchError(`${errorMessage} سيتم عرض البيانات المحفوظة محليًا إن وجدت.`);
-                    console.error("Fetch error:", error);
-                    remoteFetchSuccess = false;
                 }
-            }
+                
+                // If remote data was not used (either due to timestamp or no gistId), load from local.
+                if (!gistId || !shouldUseRemoteData) {
+                    console.log("Loading data from local storage.");
+                    const settingsRaw = localStorage.getItem('settings');
+                    const recipesRaw = localStorage.getItem('recipes');
+                    const adsRaw = localStorage.getItem('ads');
 
-            // --- Step 2: Fallback to local storage or initial data if remote fetch failed ---
-            if (!remoteFetchSuccess) {
-                console.log("Remote fetch failed or was skipped. Loading data from local storage or initial defaults.");
+                    if (recipesRaw) setRecipes(JSON.parse(recipesRaw)); else setRecipes(initialRecipes);
+                    if (adsRaw) setAds(JSON.parse(adsRaw)); else setAds(initialAds);
+                    if (settingsRaw) setSettings(JSON.parse(settingsRaw)); else setSettings(initialSettings);
+                }
+
+            } catch (error) {
+                let errorMessage = "فشل تحميل البيانات من الرابط.";
+                if (error instanceof Error) {
+                    if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
+                    else errorMessage = error.message;
+                }
+                setFetchError(`${errorMessage} سيتم عرض البيانات المحفوظة محليًا إن وجدت.`);
+                console.error("Data loading error:", error);
+
+                // Fallback to local storage or initial data on any error
                 try {
                     const settingsRaw = localStorage.getItem('settings');
                     const recipesRaw = localStorage.getItem('recipes');
                     const adsRaw = localStorage.getItem('ads');
 
-                    // Only set state if there is something in local storage, otherwise use defaults
                     if (recipesRaw) setRecipes(JSON.parse(recipesRaw)); else setRecipes(initialRecipes);
                     if (adsRaw) setAds(JSON.parse(adsRaw)); else setAds(initialAds);
                     if (settingsRaw) setSettings(JSON.parse(settingsRaw)); else setSettings(initialSettings);
                     
-                    console.log("Loaded fallback data from local storage/defaults.");
+                    console.log("Loaded fallback data from local storage/defaults due to an error.");
                 } catch (e) {
                     console.warn("Could not read from local storage, using initial data.", e);
                     setRecipes(initialRecipes);
                     setAds(initialAds);
                     setSettings(initialSettings);
                 }
+            } finally {
+                // This ensures the loading screen is always removed
+                setIsLoading(false);
             }
-
-            setIsLoading(false);
         };
 
         loadData();
     }, []);
+
 
     const saveAndSyncData = async (dataToSync: {
         recipes: Recipe[];
