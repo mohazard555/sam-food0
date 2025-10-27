@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import type { Recipe, Ad, Settings, AdminCredentials } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon } from './components/Icons';
@@ -157,7 +157,6 @@ const AdCard: React.FC<{ ad: Ad }> = ({ ad }) => (
     <div className="bg-white rounded-lg shadow-lg overflow-hidden">
         <img src={ad.imageUrl} alt={ad.title} className="w-full h-40 object-cover"/>
         <div className="p-4">
-            {/* FIX: Corrected invalid 'hh4' JSX element to 'h4'. */}
             <h4 className="font-bold text-gray-800">{ad.title}</h4>
             <p className="text-sm text-gray-600 mt-1">{ad.description}</p>
             <a href={ad.link} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block bg-amber-500 text-white px-4 py-2 rounded-md text-sm font-semibold hover:bg-amber-600 transition-colors w-full text-center">
@@ -616,24 +615,46 @@ const App: React.FC = () => {
                 const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
-                    // Fetch directly from the Gist API to bypass CDN caching and get the latest data.
-                    const response = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
+                    // Step 1: Fetch Gist details to get the raw_url
+                    const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
                         cache: 'reload',
-                         headers: {
+                        headers: {
                             'Accept': 'application/vnd.github.v3+json',
                         }
                     });
+
+                    if (!gistDetailsResponse.ok) {
+                        throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.status} ${gistDetailsResponse.statusText}`);
+                    }
+                    const gistData = await gistDetailsResponse.json();
+                    const fileInfo = gistData?.files?.[GIST_FILENAME];
+
+                    if (!fileInfo) {
+                        throw new Error(`ملف البيانات (${GIST_FILENAME}) غير موجود في الـ Gist.`);
+                    }
+
+                    const rawUrl = fileInfo.raw_url;
+                    if (!rawUrl) {
+                        throw new Error("لم يتم العثور على raw_url لملف البيانات.");
+                    }
+
+                    // Step 2: Fetch the full content from the raw_url to avoid truncation
+                    const rawContentResponse = await fetch(`${rawUrl}?_=${new Date().getTime()}`, {
+                        signal: controller.signal,
+                        cache: 'reload',
+                    });
+
                     clearTimeout(timeoutId);
 
-                    if (!response.ok) {
-                        throw new Error(`فشل في جلب البيانات من Gist API: ${response.status} ${response.statusText}`);
+                    if (!rawContentResponse.ok) {
+                        throw new Error(`فشل في جلب محتوى Gist الخام: ${rawContentResponse.status} ${rawContentResponse.statusText}`);
                     }
-                    const gistData = await response.json();
-                    const fileContent = gistData?.files?.[GIST_FILENAME]?.content;
 
-                    if (!fileContent) {
-                         throw new Error(`ملف البيانات (${GIST_FILENAME}) غير موجود في الـ Gist.`);
+                    const fileContent = await rawContentResponse.text();
+                    
+                    if (!fileContent.trim()) {
+                        throw new Error("ملف البيانات في Gist فارغ.");
                     }
 
                     const data = JSON.parse(fileContent);
