@@ -64,12 +64,107 @@ const initialAdminCredentials: AdminCredentials = {
 
 // --- HELPER FUNCTIONS ---
 const fileToBase64 = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = error => reject(error);
-  });
+    return new Promise((resolve, reject) => {
+        // Only compress images
+        if (!file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (error) => reject(error);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            if (!event.target?.result) {
+                return reject(new Error("FileReader did not return a result."));
+            }
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 800;
+                const MAX_HEIGHT = 600;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > MAX_WIDTH) {
+                        height *= MAX_WIDTH / width;
+                        width = MAX_WIDTH;
+                    }
+                } else {
+                    if (height > MAX_HEIGHT) {
+                        width *= MAX_HEIGHT / height;
+                        height = MAX_HEIGHT;
+                    }
+                }
+                canvas.width = width;
+                canvas.height = height;
+
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    return reject(new Error('Could not get canvas context'));
+                }
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // Using JPEG for compression with 85% quality
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                resolve(dataUrl);
+            };
+            img.onerror = () => reject(new Error("Could not load image from file."));
+            img.src = event.target.result as string;
+        };
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+    });
+};
+
+const compressBase64Image = (base64Str: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        if (!base64Str.startsWith('data:image')) {
+            return resolve(base64Str);
+        }
+
+        // Heuristic: if the base64 string represents an image smaller than ~225KB, don't re-compress.
+        if (base64Str.length < 300 * 1024) {
+            resolve(base64Str);
+            return;
+        }
+
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 800;
+            const MAX_HEIGHT = 600;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+                if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                }
+            } else {
+                if (height > MAX_HEIGHT) {
+                    width *= MAX_HEIGHT / height;
+                    height = MAX_HEIGHT;
+                }
+            }
+            canvas.width = width;
+            canvas.height = height;
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                return reject(new Error('Could not get canvas context'));
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            resolve(dataUrl);
+        };
+        img.onerror = () => reject(new Error("Could not load image from base64 string."));
+        img.src = base64Str;
+    });
 };
 
 const getGistIdFromUrl = (url: string): string | null => {
@@ -418,15 +513,19 @@ const AboutView: React.FC<{description: string}> = ({ description }) => (
 const SettingsView: React.FC<{
     settings: Settings;
     credentials: AdminCredentials;
+    recipes: Recipe[];
+    ads: Ad[];
     onSettingsSave: (newSettings: Settings) => Promise<void>;
     onCredentialsSave: (newCreds: AdminCredentials) => void;
     onExport: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
-}> = ({ settings, credentials, onSettingsSave, onCredentialsSave, onExport, onImport }) => {
+    onImagesOptimized: (newRecipes: Recipe[], newAds: Ad[]) => Promise<void>;
+}> = ({ settings, credentials, recipes, ads, onSettingsSave, onCredentialsSave, onExport, onImport, onImagesOptimized }) => {
 
     const [localSettings, setLocalSettings] = useState(settings);
     const [localCreds, setLocalCreds] = useState(credentials);
     const [logoPreview, setLogoPreview] = useState(settings.siteLogo);
+    const [isOptimizing, setIsOptimizing] = useState(false);
 
     useEffect(() => {
         setLocalSettings(settings);
@@ -456,6 +555,44 @@ const SettingsView: React.FC<{
         }
         onCredentialsSave(localCreds);
         alert('تم حفظ بيانات الدخول!');
+    };
+
+    const handleOptimizeImages = async () => {
+        if (!window.confirm("سيقوم هذا الإجراء بتحسين جميع صور الوصفات والإعلانات لتقليل حجمها، مما يساعد على حل مشاكل المزامنة. قد يستغرق هذا بعض الوقت. هل تريد المتابعة؟")) {
+            return;
+        }
+        setIsOptimizing(true);
+        
+        try {
+            const newRecipes = await Promise.all(recipes.map(async (recipe) => {
+                try {
+                    const compressedUrl = await compressBase64Image(recipe.imageUrl);
+                    return { ...recipe, imageUrl: compressedUrl };
+                } catch (e) {
+                    console.error(`Failed to compress image for recipe ${recipe.name}`, e);
+                    return recipe;
+                }
+            }));
+
+            const newAds = await Promise.all(ads.map(async (ad) => {
+                try {
+                    const compressedUrl = await compressBase64Image(ad.imageUrl);
+                    return { ...ad, imageUrl: compressedUrl };
+                } catch (e) {
+                    console.error(`Failed to compress image for ad ${ad.title}`, e);
+                    return ad;
+                }
+            }));
+
+            await onImagesOptimized(newRecipes, newAds);
+            alert('تم تحسين الصور ومزامنة البيانات بنجاح!');
+
+        } catch (error) {
+            alert('حدث خطأ أثناء تحسين الصور.');
+            console.error(error);
+        } finally {
+            setIsOptimizing(false);
+        }
     };
 
 
@@ -537,6 +674,20 @@ const SettingsView: React.FC<{
                                 <input id="import-file" type="file" onChange={onImport} className="hidden" accept=".json"/>
                             </div>
                          </div>
+                    </div>
+
+                     <div className="bg-white p-6 rounded-lg shadow">
+                         <h3 className="text-xl font-bold text-gray-800 mb-4 border-b pb-2">صيانة البيانات</h3>
+                         <p className="text-sm text-gray-600 mb-4">
+                            إذا كنت تواجه أخطاء في المزامنة مثل "Validation Failed"، فقد يكون ذلك بسبب حجم الصور الكبير. استخدم هذا الخيار لضغط جميع الصور الحالية وحل المشكلة.
+                         </p>
+                         <button 
+                            onClick={handleOptimizeImages}
+                            disabled={isOptimizing}
+                            className="w-full px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400"
+                        >
+                            {isOptimizing ? 'جاري التحسين...' : 'تحسين حجم الصور ومزامنة'}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -659,12 +810,12 @@ const App: React.FC = () => {
                             fetchOrNull(newRecipesFile, GIST_RECIPES_FILENAME),
                             fetchOrNull(newAdsFile, GIST_ADS_FILENAME),
                         ]);
-
-                        settingsFromGist = JSON.parse(settingsContent || '{}');
                         
+                        const cachedSettings = JSON.parse(localStorage.getItem('settings') || 'null');
                         const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
                         const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
 
+                        settingsFromGist = settingsContent ? JSON.parse(settingsContent) : cachedSettings;
                         recipesFromGist = recipesContent ? JSON.parse(recipesContent) : cachedRecipes;
                         adsFromGist = adsContent ? JSON.parse(adsContent) : cachedAds;
                         
@@ -835,6 +986,8 @@ const App: React.FC = () => {
                             errorDetail = "رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية.";
                         } else if (response.status === 404) {
                             errorDetail = "لم يتم العثور على Gist. تحقق من صحة الرابط.";
+                        } else if (response.status === 422) {
+                            errorDetail = "Validation Failed. قد يكون حجم أحد الملفات (مثل الإعلانات) كبيراً جداً. حاول تحسين حجم الصور من صفحة الإعدادات.";
                         }
                     } catch (e) {
                         console.warn("Could not parse Gist error response as JSON");
@@ -927,6 +1080,12 @@ const App: React.FC = () => {
     const handleSaveSettings = async (newSettings: Settings) => {
         setSettings(newSettings);
         await saveAndSyncData({ recipes, ads, settings: newSettings });
+    };
+
+    const handleImagesOptimized = async (newRecipes: Recipe[], newAds: Ad[]) => {
+        setRecipes(newRecipes);
+        setAds(newAds);
+        await saveAndSyncData({ recipes: newRecipes, ads: newAds, settings });
     };
 
 
@@ -1140,7 +1299,17 @@ const App: React.FC = () => {
                             </div>
                         )}
                         {view === 'manageAds' && isLoggedIn && <ManageAdsView ads={ads} setModalState={setModalState} deleteAd={handleDeleteAd} />}
-                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
+                        {view === 'settings' && isLoggedIn && <SettingsView 
+                            settings={settings} 
+                            credentials={adminCredentials} 
+                            recipes={recipes}
+                            ads={ads}
+                            onSettingsSave={handleSaveSettings} 
+                            onCredentialsSave={setAdminCredentials} 
+                            onExport={handleExportData} 
+                            onImport={handleImportData}
+                            onImagesOptimized={handleImagesOptimized}
+                            />}
                         {view === 'about' && <AboutView description={settings.siteDescription}/>}
                     </>
                 )}
