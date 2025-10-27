@@ -419,11 +419,12 @@ const AboutView: React.FC<{description: string}> = ({ description }) => (
 const SettingsView: React.FC<{
     settings: Settings;
     credentials: AdminCredentials;
+    publicGistUrl: string;
     onSettingsSave: (newSettings: Settings) => Promise<void>;
     onCredentialsSave: (newCreds: AdminCredentials) => void;
     onExport: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
-}> = ({ settings, credentials, onSettingsSave, onCredentialsSave, onExport, onImport }) => {
+}> = ({ settings, credentials, publicGistUrl, onSettingsSave, onCredentialsSave, onExport, onImport }) => {
 
     const [localSettings, setLocalSettings] = useState(settings);
     const [localCreds, setLocalCreds] = useState(credentials);
@@ -482,15 +483,13 @@ const SettingsView: React.FC<{
                         </div>
                          <div className="border-t pt-4 space-y-4">
                              <p className="text-sm text-gray-600">
-                                <b>للمزامنة عبر الإنترنت:</b><br/>
-                                1. أنشئ <b>Secret Gist</b> على GitHub.<br/>
-                                2. يجب أن يحتوي على ملف واحد فقط باسم <code>recipe-studio-data.json</code>.<br/>
-                                3. انسخ رابط <b>"Raw"</b> للملف والصقه في الحقل الأول.<br/>
-                                4. أنشئ <b>Personal Access Token (Classic)</b> من إعدادات GitHub مع صلاحية <b>`gist`</b> فقط.<br/>
-                                5. الصق الـ Token في الحقل الثاني.
+                                <b>لتمكين المزامنة عبر الإنترنت:</b><br/>
+                                1. الرابط أدناه هو المصدر الوحيد لبيانات الموقع.<br/>
+                                2. أنشئ <b>Personal Access Token (Classic)</b> من إعدادات GitHub مع صلاحية <b>`gist`</b> فقط.<br/>
+                                3. الصق الـ Token في الحقل الثاني لتمكين الحفظ والمزامنة.
                              </p>
-                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist Raw للمزامنة</label>
-                            <input type="url" id="gistUrl" value={localSettings.gistUrl} onChange={e => setLocalSettings({...localSettings, gistUrl: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="https://gist.githubusercontent.com/.../raw/.../recipe-studio-data.json"/>
+                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist Raw للمزامنة (للقراءة فقط)</label>
+                            <input type="url" id="gistUrl" value={publicGistUrl} readOnly className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 bg-gray-100 text-gray-500"/>
                             
                             <label htmlFor="githubPat" className="block text-sm font-medium text-gray-700">GitHub Personal Access Token</label>
                             <input type="password" id="githubPat" value={localSettings.githubPat} onChange={e => setLocalSettings({...localSettings, githubPat: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="ghp_..."/>
@@ -574,9 +573,8 @@ const CategoryFilter: React.FC<{
 // --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
     // --- PUBLIC DATA SOURCE CONFIGURATION ---
-    // To make your recipe data public for all visitors, paste your Gist's "Raw" URL here.
-    // This is the permanent link that always points to the latest version.
-    // Example: 'https://gist.githubusercontent.com/your-username/12345abc/raw/recipe-studio-data.json'
+    // This is the single source of truth for all site data.
+    // The admin will update this Gist, and all visitors will read from it.
     const PUBLIC_GIST_URL = "https://gist.githubusercontent.com/mohazard555/adc1a6133164a7c1318ee91a7ca6670a/raw/recipe-studio-data.json"; 
 
     // --- STATE MANAGEMENT ---
@@ -608,8 +606,7 @@ const App: React.FC = () => {
                 console.warn("Could not access local storage for settings.", e);
             }
             
-            // Unified data loading: always prioritize fetching from Gist.
-            const gistUrl = localSettings?.gistUrl || PUBLIC_GIST_URL;
+            const gistUrl = PUBLIC_GIST_URL;
 
             if (gistUrl && gistUrl.startsWith('http')) {
                 console.log(`Attempting to fetch latest data from Gist: ${gistUrl}`);
@@ -632,12 +629,12 @@ const App: React.FC = () => {
                     const adsFromGist = data.ads || [];
                     const settingsFromGist = data.settings || {};
 
-                    // New settings are a combination of Gist settings and local admin settings (PAT, Gist URL)
+                    // New settings are a combination of Gist settings and local admin PAT
                     const newSettings = {
                         ...initialSettings,
                         ...settingsFromGist,
-                        gistUrl: localSettings?.gistUrl || PUBLIC_GIST_URL,
-                        githubPat: localSettings?.githubPat || '',
+                        gistUrl: PUBLIC_GIST_URL, // Always enforce the single source of truth URL
+                        githubPat: localSettings?.githubPat || '', // Preserve the locally stored PAT
                     };
 
                     setRecipes(recipesFromGist);
@@ -717,10 +714,12 @@ const App: React.FC = () => {
             localStorage.setItem('recipes', JSON.stringify(newRecipes));
             localStorage.setItem('ads', JSON.stringify(newAds));
             if (updatedData.settings) {
-                localStorage.setItem('settings', JSON.stringify(updatedData.settings));
-                newSettings = updatedData.settings; 
+                // Ensure the settings saved locally also have the correct, non-editable Gist URL
+                const settingsToSave = { ...updatedData.settings, gistUrl: PUBLIC_GIST_URL };
+                localStorage.setItem('settings', JSON.stringify(settingsToSave));
+                newSettings = settingsToSave; 
             } else {
-                localStorage.setItem('settings', JSON.stringify(newSettings));
+                 localStorage.setItem('settings', JSON.stringify(newSettings));
             }
         } catch (e) {
             console.error("Could not write to local storage.", e);
@@ -739,6 +738,7 @@ const App: React.FC = () => {
                 const fullDataToSync = {
                     recipes: newRecipes,
                     ads: newAds,
+                    // Never sync the PAT to the public Gist file
                     settings: { ...newSettings, githubPat: '' },
                 };
                 const content = JSON.stringify(fullDataToSync, null, 2);
@@ -784,7 +784,7 @@ const App: React.FC = () => {
                 alert(`خطأ في المزامنة: ${errorMessage}. تم حفظ التغييرات محليًا.`);
             }
         }
-    }, [recipes, ads, settings]);
+    }, [recipes, ads, settings, PUBLIC_GIST_URL]);
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
@@ -1057,7 +1057,7 @@ const App: React.FC = () => {
                             </div>
                         )}
                         {view === 'manageAds' && isLoggedIn && <ManageAdsView ads={ads} setModalState={setModalState} deleteAd={handleDeleteAd} />}
-                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
+                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} publicGistUrl={PUBLIC_GIST_URL} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
                         {view === 'about' && <AboutView description={settings.siteDescription}/>}
                     </>
                 )}
