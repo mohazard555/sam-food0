@@ -631,8 +631,16 @@ const App: React.FC = () => {
 
             if (gistUrl && gistUrl.startsWith('http')) {
                 console.log(`Public context. Fetching from Gist: ${gistUrl}`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout
+
                 try {
-                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`);
+                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`, {
+                        signal: controller.signal,
+                        cache: 'no-store'
+                    });
+                    clearTimeout(timeoutId);
+
                     if (!response.ok) {
                         throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
                     }
@@ -659,8 +667,13 @@ const App: React.FC = () => {
                     }
 
                 } catch (error) {
+                    clearTimeout(timeoutId);
                     console.error("Fetch error:", error);
-                    setFetchError("فشل تحميل البيانات من الرابط. يتم عرض بيانات بديلة.");
+                    if (error instanceof Error && error.name === 'AbortError') {
+                        setFetchError("انتهت مهلة جلب البيانات. قد تكون البيانات المعروضة قديمة.");
+                    } else {
+                        setFetchError("فشل تحميل البيانات من الرابط. يتم عرض بيانات بديلة.");
+                    }
                     
                     let loadedFromCache = false;
                     try {
@@ -753,8 +766,14 @@ const App: React.FC = () => {
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(`فشل تحديث Gist: ${response.status} ${errorData.message}`);
+                    let errorDetail = response.statusText;
+                    try {
+                        const errorData = await response.json();
+                        errorDetail = errorData?.message || JSON.stringify(errorData);
+                    } catch(e) {
+                        console.warn("Could not parse Gist error response as JSON");
+                    }
+                    throw new Error(`فشل تحديث Gist: ${response.status} ${errorDetail}`);
                 }
                 console.log("Data synced to Gist successfully.");
             } catch (error) {
