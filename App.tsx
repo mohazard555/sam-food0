@@ -605,39 +605,18 @@ const App: React.FC = () => {
                 const localSettingsRaw = localStorage.getItem('settings');
                 localSettings = localSettingsRaw ? JSON.parse(localSettingsRaw) : null;
             } catch (e) {
-                console.warn("Could not access local storage for settings. Proceeding without cache.", e);
+                console.warn("Could not access local storage for settings.", e);
             }
             
-            // --- Admin Mode Logic ---
-            if (localSettings?.githubPat) {
-                console.log("Admin context detected. Loading from local storage.");
-                try {
-                    const localRecipes = JSON.parse(localStorage.getItem('recipes') || 'null') || initialRecipes;
-                    const localAds = JSON.parse(localStorage.getItem('ads') || 'null') || initialAds;
-                    setRecipes(localRecipes);
-                    setAds(localAds);
-                } catch(e) {
-                    console.error("Failed to load admin data from local storage, using initial data.", e);
-                    setRecipes(initialRecipes);
-                    setAds(initialAds);
-                }
-                setSettings(localSettings);
-                setIsLoading(false);
-                return;
-            }
-
-            // --- Public Mode Logic ---
+            // Unified data loading: always prioritize fetching from Gist.
             const gistUrl = localSettings?.gistUrl || PUBLIC_GIST_URL;
 
             if (gistUrl && gistUrl.startsWith('http')) {
-                console.log(`Public context. Fetching from Gist: ${gistUrl}`);
+                console.log(`Attempting to fetch latest data from Gist: ${gistUrl}`);
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
-                    // Force a network request, bypassing any local cache.
-                    // This resolves sync issues on mobile browsers by avoiding complex requests 
-                    // that can cause NetworkErrors.
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
                         cache: 'reload',
@@ -651,20 +630,24 @@ const App: React.FC = () => {
                     
                     const recipesFromGist = data.recipes || [];
                     const adsFromGist = data.ads || [];
-                    const settingsFromGist = {
-                        ...(data.settings || initialSettings),
+                    const settingsFromGist = data.settings || {};
+
+                    // New settings are a combination of Gist settings and local admin settings (PAT, Gist URL)
+                    const newSettings = {
+                        ...initialSettings,
+                        ...settingsFromGist,
                         gistUrl: localSettings?.gistUrl || PUBLIC_GIST_URL,
-                        githubPat: '', 
+                        githubPat: localSettings?.githubPat || '',
                     };
 
                     setRecipes(recipesFromGist);
                     setAds(adsFromGist);
-                    setSettings(settingsFromGist);
+                    setSettings(newSettings);
 
                     try {
                         localStorage.setItem('recipes', JSON.stringify(recipesFromGist));
                         localStorage.setItem('ads', JSON.stringify(adsFromGist));
-                        localStorage.setItem('settings', JSON.stringify(settingsFromGist));
+                        localStorage.setItem('settings', JSON.stringify(newSettings));
                     } catch(e) {
                         console.warn("Could not save fetched data to local storage.", e);
                     }
@@ -680,35 +663,37 @@ const App: React.FC = () => {
                         setFetchError("فشل تحميل البيانات من الرابط. يتم عرض البيانات المحفوظة محلياً.");
                     }
                     
-                    let loadedFromCache = false;
+                    // Fallback to local storage
                     try {
-                        const cachedRecipesRaw = localStorage.getItem('recipes');
-                        if (cachedRecipesRaw) {
-                            const cachedRecipes = JSON.parse(cachedRecipesRaw);
-                            if (Array.isArray(cachedRecipes) && cachedRecipes.length > 0) {
-                                const cachedAdsRaw = localStorage.getItem('ads');
-                                const cachedAds = cachedAdsRaw ? JSON.parse(cachedAdsRaw) : initialAds;
-                                setRecipes(cachedRecipes);
-                                setAds(cachedAds);
-                                loadedFromCache = true;
-                            }
-                        }
+                        const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
+                        const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
+                        
+                        setRecipes(cachedRecipes || initialRecipes);
+                        setAds(cachedAds || initialAds);
+                        setSettings(localSettings || initialSettings);
+                        console.log("Loaded data from cache due to fetch failure.");
                     } catch (e) {
-                        console.warn("Could not read from cache, will use initial data.", e);
-                    }
-
-                    if (!loadedFromCache) {
+                        console.warn("Could not read from cache, using initial data.", e);
                         setRecipes(initialRecipes);
                         setAds(initialAds);
+                        setSettings(localSettings || initialSettings);
                     }
-                    
-                    setSettings(localSettings || initialSettings);
                 }
             } else {
-                console.log("Offline context. Loading initial default data.");
-                setRecipes(initialRecipes);
-                setAds(initialAds);
-                setSettings(localSettings || initialSettings);
+                // Offline context or no Gist URL configured
+                console.log("Offline context. Loading from local storage or initial data.");
+                try {
+                    const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
+                    const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
+                    setRecipes(cachedRecipes || initialRecipes);
+                    setAds(cachedAds || initialAds);
+                    setSettings(localSettings || initialSettings);
+                } catch(e) {
+                    console.warn("Could not read from local storage, using initial data.", e);
+                    setRecipes(initialRecipes);
+                    setAds(initialAds);
+                    setSettings(localSettings || initialSettings);
+                }
             }
             setIsLoading(false);
         };
