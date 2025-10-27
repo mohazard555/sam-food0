@@ -593,11 +593,7 @@ const SettingsView: React.FC<{
 
     const handleSettingsSave = async (e: React.FormEvent) => {
         e.preventDefault();
-        try {
-            await onSettingsSave(localSettings);
-        } catch (error) {
-            // Error is handled by a toast in the parent component
-        }
+        await onSettingsSave(localSettings);
     };
 
      const handleCredentialsSave = (e: React.FormEvent) => {
@@ -692,7 +688,7 @@ const SettingsView: React.FC<{
                             {logoPreview && <img src={logoPreview} alt="معاينة الشعار" className="mt-2 rounded-md w-24 h-24 object-cover"/>}
                         </div>
                         <div className="text-right">
-                             <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">حفظ الإعدادات</button>
+                             <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">حفظ الإعدادات والمزامنة</button>
                         </div>
                     </form>
                 </div>
@@ -805,166 +801,38 @@ const App: React.FC = () => {
     };
 
     // --- DATA HANDLING ---
-    const fetchAndApplyGistData = async (gistUrl: string, localPat: string) => {
-        const gistId = getGistIdFromUrl(gistUrl);
-        if (!gistId) throw new Error("الرابط Gist المحدد في الإعدادات غير صالح.");
-        
-        console.log(`Fetching Gist content from ID: ${gistId}`);
-        const fetchOptions: RequestInit = { cache: 'reload' };
-        if (localPat) {
-            fetchOptions.headers = { 'Authorization': `token ${localPat}` };
-        }
-
-        const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
-        if (!gistDetailsResponse.ok) {
-            if (gistDetailsResponse.status === 404) throw new Error("لم يتم العثور على Gist. تحقق من صحة الرابط.");
-            if (gistDetailsResponse.status === 401 || gistDetailsResponse.status === 403) throw new Error("رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية أو لا يمتلك الصلاحيات اللازمة.");
-            throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
-        }
-        
-        const gistData = await gistDetailsResponse.json();
-        const remoteTimestamp = gistData.updated_at;
-        const files = gistData?.files;
-        if (!files) throw new Error("Gist was found, but it appears to be empty.");
-
-        setExistingGistFilenames(Object.keys(files));
-        
-        let recipesFromGist, adsFromGist, settingsFromGist;
-        const GIST_V0_SINGLE_FILE = 'recipe-studio-data.json';
-        const GIST_V1_SETTINGS = 'settings.json';
-        const GIST_V1_RECIPES = 'recipes.json';
-        const GIST_V1_ADS = 'ads.json';
-        const GIST_V2_MANIFEST = '_manifest.json';
-        const GIST_V2_SETTINGS = '_settings.json';
-        
-        if (files?.[GIST_V2_MANIFEST]) {
-            setIsLegacyDataFormat(false);
-            const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url, localPat);
-            const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url, localPat);
-            const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url, localPat) : Promise.resolve(null));
-            const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url, localPat) : Promise.resolve(null));
-            recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
-            adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
-            settingsFromGist = settingsContent;
-        } else if (files?.[GIST_V1_RECIPES]) {
-            setIsLegacyDataFormat(true);
-            const fetchFile = (filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url, localPat) : Promise.resolve(null);
-            [settingsFromGist, recipesFromGist, adsFromGist] = await Promise.all([fetchFile(GIST_V1_SETTINGS), fetchFile(GIST_V1_RECIPES), fetchFile(GIST_V1_ADS)]);
-        } else if (files?.[GIST_V0_SINGLE_FILE]) {
-            setIsLegacyDataFormat(true);
-            const data = await fetchJsonWithCacheBust(files[GIST_V0_SINGLE_FILE].raw_url, localPat);
-            recipesFromGist = data.recipes;
-            adsFromGist = data.ads;
-            settingsFromGist = data.settings;
-        } else {
-            throw new Error("Could not find any recognizable data files in the Gist.");
-        }
-        
-        const finalRecipes = recipesFromGist ?? [];
-        const finalAds = adsFromGist ?? [];
-        const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl, githubPat: localPat };
-
-        setRecipes(finalRecipes);
-        setAds(finalAds);
-        setSettings(finalSettings);
-
-        localStorage.setItem('recipes', JSON.stringify(finalRecipes));
-        localStorage.setItem('ads', JSON.stringify(finalAds));
-        localStorage.setItem('settings', JSON.stringify(finalSettings));
-        localStorage.setItem('dataTimestamp', remoteTimestamp);
-
-        console.log("Successfully fetched and applied remote Gist data.");
-    };
-
-    useEffect(() => {
-        const loadData = async () => {
-            setIsLoading(true);
-
-            let localSettings: Settings | null = null;
-            try {
-                const settingsRaw = localStorage.getItem('settings');
-                if (settingsRaw) localSettings = JSON.parse(settingsRaw);
-                
-                setRecipes(JSON.parse(localStorage.getItem('recipes') || '[]'));
-                setAds(JSON.parse(localStorage.getItem('ads') || '[]'));
-                setSettings(localSettings ?? initialSettings);
-                
-                console.log("Loaded initial data from local storage.");
-            } catch (e) {
-                console.warn("Could not read local storage, starting with empty state.", e);
-                setRecipes([]);
-                setAds([]);
-                setSettings(initialSettings);
-            }
-
-            const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
-            if (!gistUrl) {
-                console.log("No Gist URL configured. App is in local-only mode.");
-                setIsLoading(false);
-                return;
-            }
-
-            try {
-                const localTimestamp = localStorage.getItem('dataTimestamp');
-                const localPat = localSettings?.githubPat || '';
-                const gistId = getGistIdFromUrl(gistUrl);
-                if (!gistId) {
-                    addToast("الرابط Gist المحدد في الإعدادات غير صالح.", 'error');
-                    setIsLoading(false);
-                    return;
-                }
-                
-                const fetchOptions: RequestInit = { cache: 'reload' };
-                if (localPat) {
-                    fetchOptions.headers = { 'Authorization': `token ${localPat}` };
-                }
-
-                const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
-                if (!gistDetailsResponse.ok) {
-                    if (gistDetailsResponse.status === 404) throw new Error("لم يتم العثور على Gist. تحقق من صحة الرابط.");
-                    if (gistDetailsResponse.status === 401 || gistDetailsResponse.status === 403) throw new Error("رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية أو لا يمتلك الصلاحيات اللازمة.");
-                    throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
-                }
-                
-                const gistData = await gistDetailsResponse.json();
-                const remoteTimestamp = gistData.updated_at;
-
-                if (localTimestamp && remoteTimestamp && new Date(localTimestamp) > new Date(remoteTimestamp)) {
-                    console.warn("Local data is newer than remote. Keeping local changes.");
-                    addToast("لديك تغييرات محلية لم تتم مزامنتها. احفظ الإعدادات لمزامنتها.", 'error');
-                    setIsLoading(false);
-                    return;
-                }
-
-                if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
-                    console.log("Remote data is newer or local is missing. Fetching Gist content...");
-                    await fetchAndApplyGistData(gistUrl, localPat);
-                } else {
-                    console.log("Local data is already up-to-date with remote.");
-                }
-
-            } catch (error) {
-                let errorMessage = "فشل تحميل البيانات من الرابط.";
-                if (error instanceof Error) {
-                    if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
-                    else errorMessage = error.message;
-                }
-                addToast(`${errorMessage} سيتم عرض البيانات المحفوظة محليًا.`, 'error');
-                console.error("Remote data loading error:", error);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        loadData();
-    }, []);
-
-
     const saveAndSync = async (newRecipes: Recipe[], newAds: Ad[], newSettings: Settings) => {
+        // 1. Always save locally first. This is the source of truth for the admin.
+        setRecipes(newRecipes);
+        setAds(newAds);
+        setSettings(newSettings);
+        localStorage.setItem('recipes', JSON.stringify(newRecipes));
+        localStorage.setItem('ads', JSON.stringify(newAds));
+        localStorage.setItem('settings', JSON.stringify(newSettings));
+    
         const { gistUrl, githubPat } = newSettings;
+    
+        // If a Gist URL is configured, this save makes the local state dirty until synced.
+        if (gistUrl) {
+            localStorage.setItem('dataIsDirty', 'true');
+        } else {
+            localStorage.removeItem('dataIsDirty'); // In pure local mode, nothing is "dirty".
+        }
+        
         const gistId = getGistIdFromUrl(gistUrl);
 
-        if (gistId && githubPat) {
+        // 2. If we can't sync, inform the user and stop.
+        if (!gistId || !githubPat) {
+            if(gistUrl) {
+                addToast('تم الحفظ محليًا. أدخل Gist URL صالح و PAT للمزامنة.', 'error');
+            } else {
+                addToast('تم الحفظ محليًا بنجاح.', 'success'); // Pure local mode save.
+            }
+            return;
+        }
+        
+        // 3. Attempt to sync.
+        try {
             console.log(`Attempting to sync with Gist ID: ${gistId}`);
             
             const recipeFiles = newRecipes.reduce((acc, recipe) => {
@@ -991,15 +859,13 @@ const App: React.FC = () => {
                 ...adFiles,
             };
 
-            // Determine which files to delete from the Gist
             const currentFilenames = new Set(Object.keys(filesToSync));
             existingGistFilenames.forEach(filename => {
                 if (!currentFilenames.has(filename) && (filename.startsWith('recipe_') || filename.startsWith('ad_') || filename.startsWith('_'))) {
-                    filesToSync[filename] = null; // Setting to null deletes the file in the Gist
+                    filesToSync[filename] = null;
                 }
             });
 
-            // If migrating from an old format, delete the old files
             if(isLegacyDataFormat){
                 filesToSync['recipe-studio-data.json'] = null;
                 filesToSync['recipes.json'] = null;
@@ -1007,51 +873,201 @@ const App: React.FC = () => {
                 filesToSync['settings.json'] = null;
             }
 
-            try {
-                const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-                    method: 'PATCH',
-                    headers: {
-                        'Authorization': `token ${githubPat}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                    },
-                    body: JSON.stringify({
-                        description: `Recipe Studio Data - Last updated ${new Date().toLocaleString()}`,
-                        files: filesToSync,
-                    }),
-                });
+            const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `token ${githubPat}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                },
+                body: JSON.stringify({
+                    description: `Recipe Studio Data - Last updated ${new Date().toLocaleString()}`,
+                    files: filesToSync,
+                }),
+            });
 
-                if (!res.ok) {
-                    const errorData = await res.json();
-                    const errorMessage = errorData.message || 'فشل غير معروف.';
-                    throw new Error(`خطأ في المزامنة مع GitHub: ${errorMessage} (Status: ${res.status})`);
+            if (!res.ok) {
+                const errorData = await res.json();
+                const errorMessage = errorData.message || 'فشل غير معروف.';
+                throw new Error(`خطأ في المزامنة مع GitHub: ${errorMessage} (Status: ${res.status})`);
+            }
+            
+            // On SUCCESSFUL sync:
+            const responseData = await res.json();
+            localStorage.setItem('dataTimestamp', responseData.updated_at);
+            localStorage.removeItem('dataIsDirty'); // Remove dirty flag
+            setExistingGistFilenames(Object.keys(responseData.files));
+            setIsLegacyDataFormat(false);
+            addToast('تمت مزامنة البيانات بنجاح!', 'success');
+            console.log('Successfully synced data with Gist.');
+
+        } catch (error) {
+            // On FAILED sync, dataIsDirty remains 'true'
+            const message = error instanceof Error ? error.message : String(error);
+            addToast(`فشل المزامنة: ${message}. تم حفظ التغييرات محلياً.`, 'error');
+            console.error("Sync failed:", error);
+        }
+    };
+    
+    useEffect(() => {
+        const fetchAndApplyGistData = async (gistUrl: string, localPat: string) => {
+            const gistId = getGistIdFromUrl(gistUrl);
+            if (!gistId) throw new Error("الرابط Gist المحدد في الإعدادات غير صالح.");
+            
+            console.log(`Fetching Gist content from ID: ${gistId}`);
+            const fetchOptions: RequestInit = { cache: 'reload' };
+            if (localPat) {
+                fetchOptions.headers = { 'Authorization': `token ${localPat}` };
+            }
+    
+            const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
+            if (!gistDetailsResponse.ok) {
+                if (gistDetailsResponse.status === 404) throw new Error("لم يتم العثور على Gist. تحقق من صحة الرابط.");
+                if (gistDetailsResponse.status === 401 || gistDetailsResponse.status === 403) throw new Error("رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية أو لا يمتلك الصلاحيات اللازمة.");
+                throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
+            }
+            
+            const gistData = await gistDetailsResponse.json();
+            const remoteTimestamp = gistData.updated_at;
+            const files = gistData?.files;
+            if (!files) throw new Error("Gist was found, but it appears to be empty.");
+    
+            setExistingGistFilenames(Object.keys(files));
+            
+            let recipesFromGist, adsFromGist, settingsFromGist;
+            const GIST_V2_MANIFEST = '_manifest.json';
+            const GIST_V2_SETTINGS = '_settings.json';
+            
+            if (files?.[GIST_V2_MANIFEST]) {
+                setIsLegacyDataFormat(false);
+                const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url, localPat);
+                const settingsContent = await fetchJsonWithCacheBust(files[GIST_V2_SETTINGS].raw_url, localPat);
+                const recipePromises = (manifestContent.recipeFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url, localPat) : Promise.resolve(null));
+                const adPromises = (manifestContent.adFiles || []).map((filename: string) => files[filename] ? fetchJsonWithCacheBust(files[filename].raw_url, localPat) : Promise.resolve(null));
+                recipesFromGist = (await Promise.all(recipePromises)).filter(Boolean);
+                adsFromGist = (await Promise.all(adPromises)).filter(Boolean);
+                settingsFromGist = settingsContent;
+            } else {
+                 setIsLegacyDataFormat(true);
+                 const singleFile = Object.values(files)[0] as any;
+                 if (singleFile) {
+                    const data = await fetchJsonWithCacheBust(singleFile.raw_url, localPat);
+                    recipesFromGist = data.recipes;
+                    adsFromGist = data.ads;
+                    settingsFromGist = data.settings;
+                 } else {
+                    throw new Error("Could not find any recognizable data files in the Gist.");
+                 }
+            }
+            
+            const finalRecipes = recipesFromGist ?? [];
+            const finalAds = adsFromGist ?? [];
+            const finalSettings = { ...initialSettings, ...(settingsFromGist || {}), gistUrl, githubPat: localPat };
+    
+            setRecipes(finalRecipes);
+            setAds(finalAds);
+            setSettings(finalSettings);
+    
+            localStorage.setItem('recipes', JSON.stringify(finalRecipes));
+            localStorage.setItem('ads', JSON.stringify(finalAds));
+            localStorage.setItem('settings', JSON.stringify(finalSettings));
+            localStorage.setItem('dataTimestamp', remoteTimestamp);
+            localStorage.removeItem('dataIsDirty');
+    
+            console.log("Successfully fetched and applied remote Gist data.");
+        };
+
+        const loadData = async () => {
+            setIsLoading(true);
+            let localSettings: Settings | null = null;
+            try {
+                const settingsRaw = localStorage.getItem('settings');
+                if (settingsRaw) localSettings = JSON.parse(settingsRaw);
+                
+                setRecipes(JSON.parse(localStorage.getItem('recipes') || '[]'));
+                setAds(JSON.parse(localStorage.getItem('ads') || '[]'));
+                setSettings(localSettings ?? initialSettings);
+                
+                console.log("Loaded initial data from local storage.");
+            } catch (e) {
+                console.warn("Could not read local storage, starting with empty state.", e);
+                setRecipes([]);
+                setAds([]);
+                setSettings(initialSettings);
+            }
+
+            const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
+            if (!gistUrl) {
+                console.log("No Gist URL configured. App is in local-only mode.");
+                setIsLoading(false);
+                return;
+            }
+            
+            const isDirty = localStorage.getItem('dataIsDirty') === 'true';
+            if (isDirty) {
+                console.warn("Local data has unsynced changes. Skipping automatic remote fetch.");
+                addToast("لديك تغييرات محلية لم تتم مزامنتها. قم بالحفظ من الإعدادات لإجراء المزامنة.", 'error');
+                
+                const gistId = getGistIdFromUrl(gistUrl);
+                const localPat = localSettings?.githubPat || '';
+                if (gistId) {
+                    try {
+                         const fetchOptions: RequestInit = { cache: 'reload' };
+                         if (localPat) fetchOptions.headers = { 'Authorization': `token ${localPat}` };
+                         const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
+                         if (gistDetailsResponse.ok) {
+                             const gistData = await gistDetailsResponse.json();
+                             setExistingGistFilenames(Object.keys(gistData.files));
+                         }
+                    } catch (e) {
+                        console.error("Could not pre-fetch gist details while dirty", e);
+                    }
+                }
+                setIsLoading(false);
+                return;
+            }
+
+            try {
+                const localTimestamp = localStorage.getItem('dataTimestamp');
+                const localPat = localSettings?.githubPat || '';
+                const gistId = getGistIdFromUrl(gistUrl);
+                if (!gistId) {
+                    addToast("الرابط Gist المحدد في الإعدادات غير صالح.", 'error');
+                    setIsLoading(false);
+                    return;
                 }
                 
-                const responseData = await res.json();
-                localStorage.setItem('dataTimestamp', responseData.updated_at);
-                setExistingGistFilenames(Object.keys(responseData.files));
-                setIsLegacyDataFormat(false);
-                addToast('تمت مزامنة البيانات بنجاح!', 'success');
-                console.log('Successfully synced data with Gist.');
+                const fetchOptions: RequestInit = { cache: 'reload' };
+                if (localPat) fetchOptions.headers = { 'Authorization': `token ${localPat}` };
+
+                const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
+                if (!gistDetailsResponse.ok) throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
+                
+                const gistData = await gistDetailsResponse.json();
+                const remoteTimestamp = gistData.updated_at;
+
+                if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
+                    console.log("Remote data is newer. Fetching Gist content...");
+                    await fetchAndApplyGistData(gistUrl, localPat);
+                } else {
+                    console.log("Local data is already up-to-date with remote.");
+                    setExistingGistFilenames(Object.keys(gistData.files || {}));
+                }
 
             } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                addToast(message, 'error');
-                console.error("Sync failed:", error);
-                throw error; // Re-throw to be caught by the calling function
+                let errorMessage = "فشل تحميل البيانات من الرابط.";
+                if (error instanceof Error) {
+                    if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
+                    else errorMessage = error.message;
+                }
+                addToast(`${errorMessage} سيتم عرض البيانات المحفوظة محليًا.`, 'error');
+                console.error("Remote data loading error:", error);
+            } finally {
+                setIsLoading(false);
             }
-        } else {
-             addToast('تم الحفظ محليًا فقط. أدخل Gist URL و PAT للمزامنة.', 'error');
-             console.log("Gist URL or PAT not provided. Saving locally only.");
-        }
+        };
 
-        // Always update state and local storage regardless of sync outcome
-        setRecipes(newRecipes);
-        setAds(newAds);
-        setSettings(newSettings);
-        localStorage.setItem('recipes', JSON.stringify(newRecipes));
-        localStorage.setItem('ads', JSON.stringify(newAds));
-        localStorage.setItem('settings', JSON.stringify(newSettings));
-    };
+        loadData();
+    }, []);
 
     // --- CRUD OPERATIONS ---
     const saveRecipe = async (recipeData: Omit<Recipe, 'id'>, id?: string) => {
@@ -1259,7 +1275,7 @@ const App: React.FC = () => {
                             <aside className="md:col-span-3 mt-8 md:mt-0">
                                 <div className="sticky top-24 space-y-6">
                                     <h3 className="text-xl font-bold text-gray-800">إعلانات</h3>
-                                    {ads.map(ad => <AdCard key={ad.id} ad={ad} />)}
+                                    {ads.length > 0 ? ads.map(ad => <AdCard key={ad.id} ad={ad} />) : <p className="text-sm text-gray-500">لا توجد إعلانات حالياً.</p>}
                                 </div>
                             </aside>
                         </div>
