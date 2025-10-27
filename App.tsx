@@ -751,6 +751,20 @@ const App: React.FC = () => {
 
     // --- DATA LOADING & SAVING ---
     useEffect(() => {
+        const fetchJsonWithCacheBust = async (url: string) => {
+            const res = await fetch(`${url}?_=${new Date().getTime()}`, { cache: 'reload' });
+            if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+
+            const contentLength = res.headers.get('Content-Length');
+            // Set a 25MB limit to prevent browser crashes on large JSON parsing.
+            const MAX_SIZE_BYTES = 25 * 1024 * 1024;
+            if (contentLength && parseInt(contentLength, 10) > MAX_SIZE_BYTES) {
+                throw new Error(`حجم ملف البيانات (${(parseInt(contentLength, 10) / 1024 / 1024).toFixed(1)}MB) كبير جدًا ولا يمكن معالجته.`);
+            }
+
+            return res.json();
+        };
+
         const loadData = async () => {
             setIsLoading(true);
             setFetchError(null);
@@ -778,10 +792,11 @@ const App: React.FC = () => {
             // --- Step 1: Attempt to fetch from remote (Gist) first ---
             if (gistId) {
                 console.log(`Attempting to fetch remote data from Gist ID: ${gistId}`);
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 45000);
-
+                let timeoutId: number | undefined;
                 try {
+                    const controller = new AbortController();
+                    timeoutId = setTimeout(() => controller.abort(), 45000);
+
                     const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
                         cache: 'reload',
@@ -792,6 +807,7 @@ const App: React.FC = () => {
 
                     const gistData = await gistDetailsResponse.json();
                     clearTimeout(timeoutId);
+                    timeoutId = undefined;
 
                     const remoteTimestamp = gistData.updated_at;
                     const files = gistData?.files;
@@ -808,11 +824,6 @@ const App: React.FC = () => {
                     const GIST_V2_MANIFEST = '_manifest.json';
                     const GIST_V2_SETTINGS = '_settings.json';
                     
-                    const fetchJsonWithCacheBust = (url: string) => fetch(`${url}?_=${new Date().getTime()}`, { cache: 'reload' }).then(res => {
-                        if (!res.ok) throw new Error(`Failed to fetch ${url}`);
-                        return res.json();
-                    });
-
                     if (files?.[GIST_V2_MANIFEST]) {
                         setIsLegacyDataFormat(false);
                         const manifestContent = await fetchJsonWithCacheBust(files[GIST_V2_MANIFEST].raw_url);
@@ -856,7 +867,7 @@ const App: React.FC = () => {
                     remoteFetchSuccess = true;
 
                 } catch (error) {
-                    clearTimeout(timeoutId);
+                    if (timeoutId) clearTimeout(timeoutId);
                     let errorMessage = "فشل تحميل البيانات من الرابط.";
                     if (error instanceof Error) {
                         if (error.name === 'AbortError') errorMessage = "انتهت مهلة جلب البيانات.";
