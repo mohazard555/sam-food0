@@ -944,6 +944,24 @@ const App: React.FC = () => {
             
             console.log("Preparing to sync data with new V2 multi-file format.");
             
+            // Fetch latest Gist details to get current file list for accurate cleanup
+            const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}`, {
+                headers: {
+                    'Authorization': `token ${settings.githubPat}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                },
+                cache: 'no-store',
+            });
+
+            if (!gistDetailsResponse.ok) {
+                if (gistDetailsResponse.status === 404) throw new Error("لم يتم العثور على Gist. تحقق من صحة الرابط.");
+                if (gistDetailsResponse.status === 401) throw new Error("رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية.");
+                throw new Error(`فشل في جلب تفاصيل Gist قبل المزامنة (Status: ${gistDetailsResponse.status})`);
+            }
+            
+            const gistData = await gistDetailsResponse.json();
+            const currentRemoteFiles = Object.keys(gistData.files || {});
+
             const GIST_V2_MANIFEST = '_manifest.json';
             const GIST_V2_SETTINGS = '_settings.json';
             const recipeFilePrefix = 'recipe_';
@@ -973,7 +991,7 @@ const App: React.FC = () => {
             const currentFileSet = new Set(Object.keys(filesToSync));
             const legacyFileNames = ['recipe-studio-data.json', 'settings.json', 'recipes.json', 'ads.json'];
 
-            for (const existingFile of existingGistFilenames) {
+            for (const existingFile of currentRemoteFiles) {
                 const isLegacyFile = legacyFileNames.includes(existingFile);
                 const isOrphanedDataFile = (existingFile.startsWith(recipeFilePrefix) || existingFile.startsWith(adFilePrefix)) && !currentFileSet.has(existingFile);
 
@@ -1017,6 +1035,11 @@ const App: React.FC = () => {
             // Align local timestamp with the server's response for maximum accuracy
             localStorage.setItem('dataTimestamp', gistResponse.updated_at);
             
+            // Update state with the definitive list of files from the server response
+            if (gistResponse.files) {
+                setExistingGistFilenames(Object.keys(gistResponse.files));
+            }
+
             console.log("Data synced to Gist successfully.");
             if (isLegacyDataFormat) {
                 setIsLegacyDataFormat(false);
@@ -1270,15 +1293,23 @@ const App: React.FC = () => {
                         )}
                         {syncError && (
                              <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 sticky top-16 z-30">
-                                <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-3 rounded-md text-center shadow-lg">
-                                    <div className="flex justify-between items-center">
-                                        <div>
+                                <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-3 rounded-md shadow-lg">
+                                    <div className="flex justify-between items-center gap-4">
+                                        <div className="flex-grow">
                                             <strong className="font-bold">خطأ في المزامنة: </strong>
                                             <span>{syncError}</span>
                                         </div>
-                                        <button onClick={() => setSyncError(null)} className="text-red-800 hover:text-red-600">
-                                            <CloseIcon className="w-5 h-5" />
-                                        </button>
+                                        <div className="flex-shrink-0 flex items-center gap-3">
+                                            <button
+                                                onClick={() => saveAndSyncData({ recipes, ads, settings })}
+                                                className="px-3 py-1 border border-red-700 rounded-md text-sm font-medium text-red-700 hover:bg-red-200 whitespace-nowrap"
+                                            >
+                                                إعادة المحاولة
+                                            </button>
+                                            <button onClick={() => setSyncError(null)} className="text-red-800 hover:text-red-600">
+                                                <CloseIcon className="w-5 h-5" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
