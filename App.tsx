@@ -52,7 +52,7 @@ const initialSettings: Settings = {
     siteDescription: 'مرحبًا بكم في استوديو الوصفات! هذه المنصة مصممة لتكون مساحتكم الخاصة لإدارة ومشاركة وصفات الطبخ بكل سهولة والمتعة. هدفنا هو توفير أداة بسيطة وفعالة تتيح لكم إضافة وصفاتكم المفضلة، تصفحها، وتعديلها في أي وقت، وكل ذلك يتم تخزينه بأمان على جهازكم الخاص دون الحاجة لاتصال بالإنترنت أو خوادم خارجية.',
     siteLogo: '', // Default empty, user can upload
     youtubeSubscribeLink: '',
-    gistUrl: '',
+    gistUrl: 'https://gist.githubusercontent.com/mohazard555/adc1a6133164a7c1318ee91a7ca6670a/raw/recipe-studio-data.json',
     githubPat: '', // New field for PAT
 };
 
@@ -419,12 +419,11 @@ const AboutView: React.FC<{description: string}> = ({ description }) => (
 const SettingsView: React.FC<{
     settings: Settings;
     credentials: AdminCredentials;
-    publicGistUrl: string;
     onSettingsSave: (newSettings: Settings) => Promise<void>;
     onCredentialsSave: (newCreds: AdminCredentials) => void;
     onExport: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
-}> = ({ settings, credentials, publicGistUrl, onSettingsSave, onCredentialsSave, onExport, onImport }) => {
+}> = ({ settings, credentials, onSettingsSave, onCredentialsSave, onExport, onImport }) => {
 
     const [localSettings, setLocalSettings] = useState(settings);
     const [localCreds, setLocalCreds] = useState(credentials);
@@ -484,12 +483,18 @@ const SettingsView: React.FC<{
                          <div className="border-t pt-4 space-y-4">
                              <p className="text-sm text-gray-600">
                                 <b>لتمكين المزامنة عبر الإنترنت:</b><br/>
-                                1. الرابط أدناه هو المصدر الوحيد لبيانات الموقع.<br/>
+                                1. الصق <b>Gist Raw URL</b> في الحقل أدناه ليكون مصدر بيانات الموقع.<br/>
                                 2. أنشئ <b>Personal Access Token (Classic)</b> من إعدادات GitHub مع صلاحية <b>`gist`</b> فقط.<br/>
                                 3. الصق الـ Token في الحقل الثاني لتمكين الحفظ والمزامنة.
                              </p>
-                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist Raw للمزامنة (للقراءة فقط)</label>
-                            <input type="url" id="gistUrl" value={publicGistUrl} readOnly className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 bg-gray-100 text-gray-500"/>
+                            <label htmlFor="gistUrl" className="block text-sm font-medium text-gray-700">رابط Gist Raw للمزامنة</label>
+                            <input 
+                                type="url" 
+                                id="gistUrl" 
+                                value={localSettings.gistUrl} 
+                                onChange={e => setLocalSettings({...localSettings, gistUrl: e.target.value})} 
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                placeholder="https://gist.githubusercontent.com/user/id/raw/..."/>
                             
                             <label htmlFor="githubPat" className="block text-sm font-medium text-gray-700">GitHub Personal Access Token</label>
                             <input type="password" id="githubPat" value={localSettings.githubPat} onChange={e => setLocalSettings({...localSettings, githubPat: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="ghp_..."/>
@@ -572,11 +577,6 @@ const CategoryFilter: React.FC<{
 
 // --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
-    // --- PUBLIC DATA SOURCE CONFIGURATION ---
-    // This is the single source of truth for all site data.
-    // The admin will update this Gist, and all visitors will read from it.
-    const PUBLIC_GIST_URL = "https://gist.githubusercontent.com/mohazard555/adc1a6133164a7c1318ee91a7ca6670a/raw/recipe-studio-data.json"; 
-
     // --- STATE MANAGEMENT ---
     const [recipes, setRecipes] = useState<Recipe[]>([]);
     const [ads, setAds] = useState<Ad[]>([]);
@@ -607,7 +607,8 @@ const App: React.FC = () => {
             }
             
             const GIST_FILENAME = 'recipe-studio-data.json';
-            const gistId = getGistIdFromUrl(PUBLIC_GIST_URL);
+            const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
+            const gistId = getGistIdFromUrl(gistUrl);
 
             if (gistId) {
                 console.log(`Attempting to fetch latest data from Gist API for ID: ${gistId}`);
@@ -641,11 +642,11 @@ const App: React.FC = () => {
                     const adsFromGist = data.ads || [];
                     const settingsFromGist = data.settings || {};
 
-                    // New settings are a combination of Gist settings and local admin PAT
+                    // New settings are a combination of Gist settings and local admin PAT/Gist URL
                     const newSettings = {
                         ...initialSettings,
                         ...settingsFromGist,
-                        gistUrl: PUBLIC_GIST_URL, // Always enforce the single source of truth URL
+                        gistUrl: gistUrl,
                         githubPat: localSettings?.githubPat || '', // Preserve the locally stored PAT
                     };
 
@@ -730,10 +731,8 @@ const App: React.FC = () => {
             localStorage.setItem('recipes', JSON.stringify(newRecipes));
             localStorage.setItem('ads', JSON.stringify(newAds));
             if (updatedData.settings) {
-                // Ensure the settings saved locally also have the correct, non-editable Gist URL
-                const settingsToSave = { ...updatedData.settings, gistUrl: PUBLIC_GIST_URL };
-                localStorage.setItem('settings', JSON.stringify(settingsToSave));
-                newSettings = settingsToSave; 
+                localStorage.setItem('settings', JSON.stringify(updatedData.settings));
+                newSettings = updatedData.settings; 
             } else {
                  localStorage.setItem('settings', JSON.stringify(newSettings));
             }
@@ -800,7 +799,7 @@ const App: React.FC = () => {
                 alert(`خطأ في المزامنة: ${errorMessage}. تم حفظ التغييرات محليًا.`);
             }
         }
-    }, [recipes, ads, settings, PUBLIC_GIST_URL]);
+    }, [recipes, ads, settings]);
 
     // --- HANDLER FUNCTIONS ---
     // RECIPES
@@ -1073,7 +1072,7 @@ const App: React.FC = () => {
                             </div>
                         )}
                         {view === 'manageAds' && isLoggedIn && <ManageAdsView ads={ads} setModalState={setModalState} deleteAd={handleDeleteAd} />}
-                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} publicGistUrl={PUBLIC_GIST_URL} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
+                        {view === 'settings' && isLoggedIn && <SettingsView settings={settings} credentials={adminCredentials} onSettingsSave={handleSaveSettings} onCredentialsSave={setAdminCredentials} onExport={handleExportData} onImport={handleImportData}/>}
                         {view === 'about' && <AboutView description={settings.siteDescription}/>}
                     </>
                 )}
