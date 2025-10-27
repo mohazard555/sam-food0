@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import type { Recipe, Ad, Settings, AdminCredentials } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useSessionStorage } from './hooks/useSessionStorage';
-import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon, CloseIcon } from './components/Icons';
+import { PlusIcon, TrashIcon, PencilIcon, DownloadIcon, BookOpenIcon, PrintIcon, CloseIcon, CloudCheckIcon, ExclamationTriangleIcon, SpinnerIcon, CloudArrowUpIcon } from './components/Icons';
 import Modal from './components/Modal';
 import { ToastContainer, ToastProps } from './components/Toast';
 
@@ -20,6 +20,7 @@ type ModalState =
   | { type: 'subscribeToView'; recipe: Recipe }
   | null;
 type ToastMessage = Omit<ToastProps, 'onClose' | 'id'>;
+type SyncStatus = 'idle' | 'syncing' | 'synced' | 'dirty' | 'error';
 
 // --- INITIAL DATA ---
 const initialSettings: Settings = {
@@ -207,6 +208,45 @@ ${recipe.steps}
 
 
 // --- UI COMPONENTS ---
+const SyncStatusIndicator: React.FC<{ status: SyncStatus; lastSync: string | null; onSync: () => void; }> = ({ status, lastSync, onSync }) => {
+    const statusConfig = {
+        synced: { text: 'متزامن', icon: <CloudCheckIcon className="w-5 h-5 text-green-600"/>, color: 'text-green-700 bg-green-100' },
+        syncing: { text: 'جاري المزامنة...', icon: <SpinnerIcon className="w-5 h-5 text-blue-600"/>, color: 'text-blue-700 bg-blue-100' },
+        dirty: { text: 'تغييرات غير متزامنة', icon: <ExclamationTriangleIcon className="w-5 h-5 text-amber-600"/>, color: 'text-amber-700 bg-amber-100' },
+        error: { text: 'خطأ في المزامنة', icon: <ExclamationTriangleIcon className="w-5 h-5 text-red-600"/>, color: 'text-red-700 bg-red-100' },
+        idle: { text: 'المزامنة جاهزة', icon: <CloudArrowUpIcon className="w-5 h-5 text-gray-600"/>, color: 'text-gray-700 bg-gray-100' },
+    };
+
+    const current = statusConfig[status];
+
+    const getTooltip = () => {
+        switch (status) {
+            case 'synced':
+                return `آخر مزامنة ناجحة: ${lastSync ? new Date(lastSync).toLocaleString() : 'غير معروف'}`;
+            case 'dirty':
+                return 'توجد تغييرات محلية. اضغط للمزامنة.';
+            case 'error':
+                return 'فشلت المزامنة الأخيرة. اضغط للمحاولة مرة أخرى.';
+            case 'idle':
+                 return 'لا توجد تغييرات للمزامنة. اضغط للتحقق من التحديثات.';
+            default:
+                return 'جاري المزامنة...';
+        }
+    };
+
+    return (
+        <button 
+            onClick={onSync} 
+            disabled={status === 'syncing'}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${current.color} disabled:cursor-not-allowed transition-colors`}
+            title={getTooltip()}
+        >
+            {current.icon}
+            <span>{current.text}</span>
+        </button>
+    );
+};
+
 const Header: React.FC<{ 
     settings: Settings;
     setView: (view: View) => void; 
@@ -214,7 +254,10 @@ const Header: React.FC<{
     isLoggedIn: boolean;
     onLoginClick: () => void;
     onLogoutClick: () => void;
-}> = ({ settings, setView, currentView, isLoggedIn, onLoginClick, onLogoutClick }) => {
+    syncStatus: SyncStatus;
+    lastSync: string | null;
+    onSync: () => void;
+}> = ({ settings, setView, currentView, isLoggedIn, onLoginClick, onLogoutClick, syncStatus, lastSync, onSync }) => {
     
     const navLinkClasses = (view: View) => `px-4 py-2 rounded-md text-sm font-medium transition-colors ${currentView === view ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-orange-100 hover:text-orange-700'}`;
 
@@ -230,6 +273,7 @@ const Header: React.FC<{
                         <h1 className="text-2xl font-bold text-gray-800">{settings.siteName}</h1>
                     </button>
                     <nav className="hidden md:flex items-center space-s-4">
+                        {isLoggedIn && settings.gistUrl && <SyncStatusIndicator status={syncStatus} lastSync={lastSync} onSync={onSync} />}
                         <button onClick={() => setView('home')} className={navLinkClasses('home')}>الرئيسية</button>
                         {isLoggedIn && <button onClick={() => setView('manageAds')} className={navLinkClasses('manageAds')}>إدارة الإعلانات</button>}
                         {isLoggedIn && <button onClick={() => setView('settings')} className={navLinkClasses('settings')}>الإعدادات</button>}
@@ -570,7 +614,8 @@ const SettingsView: React.FC<{
     onExport: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onImagesOptimized: (newRecipes: Recipe[], newAds: Ad[]) => Promise<void>;
-}> = ({ settings, credentials, recipes, ads, onSettingsSave, onCredentialsSave, onExport, onImport, onImagesOptimized }) => {
+    syncStatus: SyncStatus;
+}> = ({ settings, credentials, recipes, ads, onSettingsSave, onCredentialsSave, onExport, onImport, onImagesOptimized, syncStatus }) => {
 
     const [localSettings, setLocalSettings] = useState(settings);
     const [localCreds, setLocalCreds] = useState(credentials);
@@ -641,7 +686,8 @@ const SettingsView: React.FC<{
             setIsOptimizing(false);
         }
     };
-
+    
+    const isSyncing = syncStatus === 'syncing';
 
     return (
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -688,7 +734,10 @@ const SettingsView: React.FC<{
                             {logoPreview && <img src={logoPreview} alt="معاينة الشعار" className="mt-2 rounded-md w-24 h-24 object-cover"/>}
                         </div>
                         <div className="text-right">
-                             <button type="submit" className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">حفظ الإعدادات والمزامنة</button>
+                             <button type="submit" disabled={isSyncing} className="inline-flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                                {isSyncing && <SpinnerIcon className="w-5 h-5 me-2" />}
+                                {isSyncing ? 'جاري المزامنة...' : 'حفظ الإعدادات والمزامنة'}
+                             </button>
                         </div>
                     </form>
                 </div>
@@ -730,7 +779,7 @@ const SettingsView: React.FC<{
                          </p>
                          <button 
                             onClick={handleOptimizeImages}
-                            disabled={isOptimizing}
+                            disabled={isOptimizing || isSyncing}
                             className="w-full px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400"
                         >
                             {isOptimizing ? 'جاري التحسين...' : 'تحسين حجم الصور ومزامنة'}
@@ -791,6 +840,9 @@ const App: React.FC = () => {
 
     const [isLegacyDataFormat, setIsLegacyDataFormat] = useState(false);
     const [existingGistFilenames, setExistingGistFilenames] = useState<string[]>([]);
+    
+    const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+    const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
     const addToast = (message: string, type: ToastMessage['type']) => {
@@ -801,7 +853,7 @@ const App: React.FC = () => {
     };
 
     // --- DATA HANDLING ---
-    const saveAndSync = async (newRecipes: Recipe[], newAds: Ad[], newSettings: Settings) => {
+    const saveAndSync = async (newRecipes: Recipe[], newAds: Ad[], newSettings: Settings, { isManualTrigger = false } = {}) => {
         // 1. Always save locally first. This is the source of truth for the admin.
         setRecipes(newRecipes);
         setAds(newAds);
@@ -815,6 +867,7 @@ const App: React.FC = () => {
         // If a Gist URL is configured, this save makes the local state dirty until synced.
         if (gistUrl) {
             localStorage.setItem('dataIsDirty', 'true');
+            setSyncStatus('dirty');
         } else {
             localStorage.removeItem('dataIsDirty'); // In pure local mode, nothing is "dirty".
         }
@@ -823,15 +876,17 @@ const App: React.FC = () => {
 
         // 2. If we can't sync, inform the user and stop.
         if (!gistId || !githubPat) {
-            if(gistUrl) {
+            if (gistUrl && isManualTrigger) {
                 addToast('تم الحفظ محليًا. أدخل Gist URL صالح و PAT للمزامنة.', 'error');
-            } else {
+            } else if (isManualTrigger) {
                 addToast('تم الحفظ محليًا بنجاح.', 'success'); // Pure local mode save.
+                setSyncStatus('idle');
             }
             return;
         }
         
         // 3. Attempt to sync.
+        setSyncStatus('syncing');
         try {
             console.log(`Attempting to sync with Gist ID: ${gistId}`);
             
@@ -893,15 +948,21 @@ const App: React.FC = () => {
             
             // On SUCCESSFUL sync:
             const responseData = await res.json();
-            localStorage.setItem('dataTimestamp', responseData.updated_at);
+            const newTimestamp = responseData.updated_at;
+            localStorage.setItem('dataTimestamp', newTimestamp);
+            setLastSyncTimestamp(newTimestamp);
             localStorage.removeItem('dataIsDirty'); // Remove dirty flag
             setExistingGistFilenames(Object.keys(responseData.files));
             setIsLegacyDataFormat(false);
-            addToast('تمت مزامنة البيانات بنجاح!', 'success');
+            setSyncStatus('synced');
+            if (isManualTrigger) {
+                addToast('تمت مزامنة البيانات بنجاح!', 'success');
+            }
             console.log('Successfully synced data with Gist.');
 
         } catch (error) {
             // On FAILED sync, dataIsDirty remains 'true'
+            setSyncStatus('error');
             const message = error instanceof Error ? error.message : String(error);
             addToast(`فشل المزامنة: ${message}. تم حفظ التغييرات محلياً.`, 'error');
             console.error("Sync failed:", error);
@@ -971,6 +1032,7 @@ const App: React.FC = () => {
             localStorage.setItem('ads', JSON.stringify(finalAds));
             localStorage.setItem('settings', JSON.stringify(finalSettings));
             localStorage.setItem('dataTimestamp', remoteTimestamp);
+            setLastSyncTimestamp(remoteTimestamp);
             localStorage.removeItem('dataIsDirty');
     
             console.log("Successfully fetched and applied remote Gist data.");
@@ -986,6 +1048,7 @@ const App: React.FC = () => {
                 setRecipes(JSON.parse(localStorage.getItem('recipes') || '[]'));
                 setAds(JSON.parse(localStorage.getItem('ads') || '[]'));
                 setSettings(localSettings ?? initialSettings);
+                setLastSyncTimestamp(localStorage.getItem('dataTimestamp'));
                 
                 console.log("Loaded initial data from local storage.");
             } catch (e) {
@@ -998,12 +1061,14 @@ const App: React.FC = () => {
             const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
             if (!gistUrl) {
                 console.log("No Gist URL configured. App is in local-only mode.");
+                setSyncStatus('idle');
                 setIsLoading(false);
                 return;
             }
             
             const isDirty = localStorage.getItem('dataIsDirty') === 'true';
             if (isDirty) {
+                setSyncStatus('dirty');
                 console.warn("Local data has unsynced changes. Skipping automatic remote fetch.");
                 addToast("لديك تغييرات محلية لم تتم مزامنتها. قم بالحفظ من الإعدادات لإجراء المزامنة.", 'error');
                 
@@ -1031,6 +1096,7 @@ const App: React.FC = () => {
                 const localPat = localSettings?.githubPat || '';
                 const gistId = getGistIdFromUrl(gistUrl);
                 if (!gistId) {
+                    setSyncStatus('error');
                     addToast("الرابط Gist المحدد في الإعدادات غير صالح.", 'error');
                     setIsLoading(false);
                     return;
@@ -1048,12 +1114,15 @@ const App: React.FC = () => {
                 if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
                     console.log("Remote data is newer. Fetching Gist content...");
                     await fetchAndApplyGistData(gistUrl, localPat);
+                    setSyncStatus('synced');
                 } else {
                     console.log("Local data is already up-to-date with remote.");
                     setExistingGistFilenames(Object.keys(gistData.files || {}));
+                    setSyncStatus('synced');
                 }
 
             } catch (error) {
+                setSyncStatus('error');
                 let errorMessage = "فشل تحميل البيانات من الرابط.";
                 if (error instanceof Error) {
                     if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
@@ -1105,7 +1174,7 @@ const App: React.FC = () => {
     };
 
     const handleSettingsSave = async (newSettings: Settings) => {
-        await saveAndSync(recipes, ads, newSettings);
+        await saveAndSync(recipes, ads, newSettings, { isManualTrigger: true });
     };
     
     const handleCredentialsSave = (newCreds: AdminCredentials) => {
@@ -1113,7 +1182,13 @@ const App: React.FC = () => {
     };
 
     const handleImagesOptimized = async (newRecipes: Recipe[], newAds: Ad[]) => {
-        await saveAndSync(newRecipes, newAds, settings);
+        await saveAndSync(newRecipes, newAds, settings, { isManualTrigger: true });
+    };
+
+    const handleManualSync = () => {
+        if (syncStatus === 'syncing') return;
+        console.log("Manual sync triggered.");
+        saveAndSync(recipes, ads, settings, { isManualTrigger: true });
     };
 
 
@@ -1160,7 +1235,7 @@ const App: React.FC = () => {
                     const importedData = JSON.parse(event.target?.result as string);
                     if (importedData.recipes && importedData.ads && importedData.settings) {
                         if (window.confirm('هل أنت متأكد من أنك تريد استبدال جميع البيانات الحالية بالبيانات الموجودة في هذا الملف؟')) {
-                           await saveAndSync(importedData.recipes, importedData.ads, importedData.settings);
+                           await saveAndSync(importedData.recipes, importedData.ads, importedData.settings, { isManualTrigger: true });
                            addToast('تم استيراد البيانات بنجاح!', 'success');
                         }
                     } else {
@@ -1296,6 +1371,7 @@ const App: React.FC = () => {
                     onExport={handleExportData}
                     onImport={handleImportData}
                     onImagesOptimized={handleImagesOptimized}
+                    syncStatus={syncStatus}
                 /> : null;
             default:
                 return null;
@@ -1311,6 +1387,9 @@ const App: React.FC = () => {
                 isLoggedIn={isLoggedIn}
                 onLoginClick={() => setModalState({ type: 'login' })}
                 onLogoutClick={handleLogout}
+                syncStatus={syncStatus}
+                lastSync={lastSyncTimestamp}
+                onSync={handleManualSync}
             />
             <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
             {renderView()}
