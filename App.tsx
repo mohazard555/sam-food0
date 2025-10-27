@@ -632,17 +632,17 @@ const App: React.FC = () => {
             if (gistUrl && gistUrl.startsWith('http')) {
                 console.log(`Public context. Fetching from Gist: ${gistUrl}`);
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout
+                const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
+                    // Simplified fetch call. The timestamp is the most reliable cache-busting mechanism.
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
-                        cache: 'no-store'
                     });
                     clearTimeout(timeoutId);
 
                     if (!response.ok) {
-                        throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
+                        throw new Error(`فشل في جلب البيانات: ${response.status} ${response.statusText}`);
                     }
                     const data = await response.json();
                     
@@ -670,9 +670,11 @@ const App: React.FC = () => {
                     clearTimeout(timeoutId);
                     console.error("Fetch error:", error);
                     if (error instanceof Error && error.name === 'AbortError') {
-                        setFetchError("انتهت مهلة جلب البيانات. قد تكون البيانات المعروضة قديمة.");
+                        setFetchError("انتهت مهلة جلب البيانات. يتم عرض البيانات المحفوظة محلياً.");
+                    } else if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
+                        setFetchError("حدث خطأ في الشبكة. يرجى التحقق من اتصالك بالإنترنت. يتم عرض البيانات المحفوظة محلياً.");
                     } else {
-                        setFetchError("فشل تحميل البيانات من الرابط. يتم عرض بيانات بديلة.");
+                        setFetchError("فشل تحميل البيانات من الرابط. يتم عرض البيانات المحفوظة محلياً.");
                     }
                     
                     let loadedFromCache = false;
@@ -766,27 +768,32 @@ const App: React.FC = () => {
                 });
 
                 if (!response.ok) {
-                    let errorDetail = response.statusText;
+                    let errorDetail = `Status: ${response.status} ${response.statusText}`;
                     try {
                         const errorData = await response.json();
                         errorDetail = errorData?.message || JSON.stringify(errorData);
-                    } catch(e) {
+                         if (response.status === 401) {
+                            errorDetail = "رمز الوصول (PAT) غير صحيح أو منتهي الصلاحية.";
+                        } else if (response.status === 404) {
+                            errorDetail = "لم يتم العثور على Gist. تحقق من صحة الرابط.";
+                        }
+                    } catch (e) {
                         console.warn("Could not parse Gist error response as JSON");
                     }
-                    throw new Error(`فشل تحديث Gist: ${response.status} ${errorDetail}`);
+                    throw new Error(`فشل تحديث Gist: ${errorDetail}`);
                 }
                 console.log("Data synced to Gist successfully.");
             } catch (error) {
                 console.error("Gist sync error:", error);
-                let errorMessage = "حدث خطأ غير متوقع.";
-                if (error instanceof Error) {
+                let errorMessage: string;
+                if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
+                    errorMessage = "فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.";
+                } else if (error instanceof Error) {
                     errorMessage = error.message;
-                } else if (typeof error === 'string') {
-                    errorMessage = error;
-                } else if (error && typeof error === 'object' && 'message' in error) {
-                    errorMessage = String((error as {message: unknown}).message);
+                } else {
+                    errorMessage = "حدث خطأ غير متوقع أثناء المزامنة.";
                 }
-                alert(`خطأ في المزامنة مع Gist: ${errorMessage}. تم حفظ التغييرات محليًا بنجاح.`);
+                alert(`خطأ في المزامنة: ${errorMessage}. تم حفظ التغييرات محليًا.`);
             }
         }
     }, [recipes, ads, settings]);
