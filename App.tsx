@@ -606,24 +606,36 @@ const App: React.FC = () => {
                 console.warn("Could not access local storage for settings.", e);
             }
             
-            const gistUrl = PUBLIC_GIST_URL;
+            const GIST_FILENAME = 'recipe-studio-data.json';
+            const gistId = getGistIdFromUrl(PUBLIC_GIST_URL);
 
-            if (gistUrl && gistUrl.startsWith('http')) {
-                console.log(`Attempting to fetch latest data from Gist: ${gistUrl}`);
+            if (gistId) {
+                console.log(`Attempting to fetch latest data from Gist API for ID: ${gistId}`);
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
-                    const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`, {
+                    // Fetch directly from the Gist API to bypass CDN caching and get the latest data.
+                    const response = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
                         cache: 'reload',
+                         headers: {
+                            'Accept': 'application/vnd.github.v3+json',
+                        }
                     });
                     clearTimeout(timeoutId);
 
                     if (!response.ok) {
-                        throw new Error(`فشل في جلب البيانات: ${response.status} ${response.statusText}`);
+                        throw new Error(`فشل في جلب البيانات من Gist API: ${response.status} ${response.statusText}`);
                     }
-                    const data = await response.json();
+                    const gistData = await response.json();
+                    const fileContent = gistData?.files?.[GIST_FILENAME]?.content;
+
+                    if (!fileContent) {
+                         throw new Error(`ملف البيانات (${GIST_FILENAME}) غير موجود في الـ Gist.`);
+                    }
+
+                    const data = JSON.parse(fileContent);
                     
                     const recipesFromGist = data.recipes || [];
                     const adsFromGist = data.ads || [];
@@ -652,13 +664,17 @@ const App: React.FC = () => {
                 } catch (error) {
                     clearTimeout(timeoutId);
                     console.error("Fetch error:", error);
+                    let errorMessage: string;
                     if (error instanceof Error && error.name === 'AbortError') {
-                        setFetchError("انتهت مهلة جلب البيانات. يتم عرض البيانات المحفوظة محلياً.");
+                        errorMessage = "انتهت مهلة جلب البيانات. يتم عرض البيانات المحفوظة محلياً.";
                     } else if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
-                        setFetchError("حدث خطأ في الشبكة. يرجى التحقق من اتصالك بالإنترنت. يتم عرض البيانات المحفوظة محلياً.");
+                        errorMessage = "حدث خطأ في الشبكة. يرجى التحقق من اتصالك بالإنترنت. يتم عرض البيانات المحفوظة محلياً.";
+                    } else if (error instanceof Error) {
+                         errorMessage = `${error.message}. يتم عرض البيانات المحفوظة محلياً.`;
                     } else {
-                        setFetchError("فشل تحميل البيانات من الرابط. يتم عرض البيانات المحفوظة محلياً.");
+                        errorMessage = "فشل تحميل البيانات من الرابط. يتم عرض البيانات المحفوظة محلياً.";
                     }
+                    setFetchError(errorMessage);
                     
                     // Fallback to local storage
                     try {
@@ -677,8 +693,8 @@ const App: React.FC = () => {
                     }
                 }
             } else {
-                // Offline context or no Gist URL configured
-                console.log("Offline context. Loading from local storage or initial data.");
+                // Offline context or no Gist ID found
+                console.log("Could not extract Gist ID. Loading from local storage or initial data.");
                 try {
                     const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
                     const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
