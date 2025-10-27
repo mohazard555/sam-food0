@@ -605,7 +605,11 @@ const App: React.FC = () => {
                 console.warn("Could not access local storage for settings.", e);
             }
             
-            const GIST_FILENAME = 'recipe-studio-data.json';
+            const GIST_OLD_FILENAME = 'recipe-studio-data.json';
+            const GIST_SETTINGS_FILENAME = 'settings.json';
+            const GIST_RECIPES_FILENAME = 'recipes.json';
+            const GIST_ADS_FILENAME = 'ads.json';
+
             const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
             const gistId = getGistIdFromUrl(gistUrl);
 
@@ -615,60 +619,62 @@ const App: React.FC = () => {
                 const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
-                    // Step 1: Fetch Gist details to get the raw_url
                     const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
                         cache: 'reload',
-                        headers: {
-                            'Accept': 'application/vnd.github.v3+json',
-                        }
+                        headers: { 'Accept': 'application/vnd.github.v3+json' }
                     });
 
                     if (!gistDetailsResponse.ok) {
                         throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.status} ${gistDetailsResponse.statusText}`);
                     }
                     const gistData = await gistDetailsResponse.json();
-                    const fileInfo = gistData?.files?.[GIST_FILENAME];
+                    const files = gistData?.files;
 
-                    if (!fileInfo) {
-                        throw new Error(`ملف البيانات (${GIST_FILENAME}) غير موجود في الـ Gist.`);
+                    let recipesFromGist, adsFromGist, settingsFromGist;
+
+                    const newSettingsFile = files?.[GIST_SETTINGS_FILENAME];
+                    const newRecipesFile = files?.[GIST_RECIPES_FILENAME];
+                    const newAdsFile = files?.[GIST_ADS_FILENAME];
+                    const oldDataFile = files?.[GIST_OLD_FILENAME];
+                    
+                    if (newSettingsFile && newRecipesFile && newAdsFile) {
+                        console.log("Loading data from new multi-file format.");
+                        const [settingsContent, recipesContent, adsContent] = await Promise.all([
+                            fetch(`${newSettingsFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_SETTINGS_FILENAME}`); return res.text(); }),
+                            fetch(`${newRecipesFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_RECIPES_FILENAME}`); return res.text(); }),
+                            fetch(`${newAdsFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_ADS_FILENAME}`); return res.text(); }),
+                        ]);
+                        
+                        settingsFromGist = JSON.parse(settingsContent || '{}');
+                        recipesFromGist = JSON.parse(recipesContent || '[]');
+                        adsFromGist = JSON.parse(adsContent || '[]');
+
+                    } else if (oldDataFile) {
+                        console.log("Loading data from old single-file format.");
+                        const rawUrl = oldDataFile.raw_url;
+                        if (!rawUrl) throw new Error("Could not find raw_url for old data file.");
+
+                        const rawContentResponse = await fetch(`${rawUrl}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' });
+                        if (!rawContentResponse.ok) throw new Error(`Failed to fetch content from ${rawUrl}`);
+                        const fileContent = await rawContentResponse.text();
+                        if (!fileContent.trim()) throw new Error("Old data file is empty.");
+
+                        const data = JSON.parse(fileContent);
+                        recipesFromGist = data.recipes || [];
+                        adsFromGist = data.ads || [];
+                        settingsFromGist = data.settings || {};
+                    } else {
+                        throw new Error(`No data files (${GIST_RECIPES_FILENAME}, ${GIST_ADS_FILENAME}, ${GIST_SETTINGS_FILENAME}, or ${GIST_OLD_FILENAME}) found in the Gist.`);
                     }
-
-                    const rawUrl = fileInfo.raw_url;
-                    if (!rawUrl) {
-                        throw new Error("لم يتم العثور على raw_url لملف البيانات.");
-                    }
-
-                    // Step 2: Fetch the full content from the raw_url to avoid truncation
-                    const rawContentResponse = await fetch(`${rawUrl}?_=${new Date().getTime()}`, {
-                        signal: controller.signal,
-                        cache: 'reload',
-                    });
-
+                    
                     clearTimeout(timeoutId);
 
-                    if (!rawContentResponse.ok) {
-                        throw new Error(`فشل في جلب محتوى Gist الخام: ${rawContentResponse.status} ${rawContentResponse.statusText}`);
-                    }
-
-                    const fileContent = await rawContentResponse.text();
-                    
-                    if (!fileContent.trim()) {
-                        throw new Error("ملف البيانات في Gist فارغ.");
-                    }
-
-                    const data = JSON.parse(fileContent);
-                    
-                    const recipesFromGist = data.recipes || [];
-                    const adsFromGist = data.ads || [];
-                    const settingsFromGist = data.settings || {};
-
-                    // New settings are a combination of Gist settings and local admin PAT/Gist URL
                     const newSettings = {
                         ...initialSettings,
                         ...settingsFromGist,
                         gistUrl: gistUrl,
-                        githubPat: localSettings?.githubPat || '', // Preserve the locally stored PAT
+                        githubPat: localSettings?.githubPat || '',
                     };
 
                     setRecipes(recipesFromGist);
@@ -752,7 +758,10 @@ const App: React.FC = () => {
             console.error("Could not write to local storage.", e);
         }
 
-        const GIST_FILENAME = 'recipe-studio-data.json';
+        const GIST_OLD_FILENAME = 'recipe-studio-data.json';
+        const GIST_SETTINGS_FILENAME = 'settings.json';
+        const GIST_RECIPES_FILENAME = 'recipes.json';
+        const GIST_ADS_FILENAME = 'ads.json';
 
         if (settings.gistUrl && settings.githubPat) {
             try {
@@ -762,13 +771,20 @@ const App: React.FC = () => {
                     throw new Error("لم يتمكن من استخراج Gist ID صالح من الرابط. تأكد من أنك نسخت رابط Gist صحيح.");
                 }
 
-                const fullDataToSync = {
-                    recipes,
-                    ads,
-                    // Never sync the PAT to the public Gist file
-                    settings: { ...settings, githubPat: '' },
+                const filesToSync = {
+                    [GIST_SETTINGS_FILENAME]: {
+                        content: JSON.stringify({ ...settings, githubPat: '' }, null, 2)
+                    },
+                    [GIST_RECIPES_FILENAME]: {
+                        content: JSON.stringify(recipes, null, 2)
+                    },
+                    [GIST_ADS_FILENAME]: {
+                        content: JSON.stringify(ads, null, 2)
+                    },
+                    // This will delete the old single file on the first sync after this update.
+                    // If the file doesn't exist, GitHub's API ignores this.
+                    [GIST_OLD_FILENAME]: null
                 };
-                const content = JSON.stringify(fullDataToSync, null, 2);
 
                 const response = await fetch(`https://api.github.com/gists/${gistId}`, {
                     method: 'PATCH',
@@ -778,7 +794,7 @@ const App: React.FC = () => {
                     },
                     body: JSON.stringify({
                         description: `Recipe Studio Data - Last updated ${new Date().toISOString()}`,
-                        files: { [GIST_FILENAME]: { content: content } },
+                        files: filesToSync,
                     }),
                 });
 
@@ -797,7 +813,7 @@ const App: React.FC = () => {
                     }
                     throw new Error(`فشل تحديث Gist: ${errorDetail}`);
                 }
-                console.log("Data synced to Gist successfully.");
+                console.log("Data synced to Gist successfully in multi-file format.");
             } catch (error) {
                 console.error("Gist sync error:", error);
                 let errorMessage: string;
