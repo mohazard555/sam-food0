@@ -635,9 +635,12 @@ const App: React.FC = () => {
                 const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second timeout
 
                 try {
-                    // Simplified fetch call. The timestamp is the most reliable cache-busting mechanism.
+                    // Force a network request, bypassing any local cache.
+                    // This resolves sync issues on mobile browsers by avoiding complex requests 
+                    // that can cause NetworkErrors.
                     const response = await fetch(`${gistUrl}?_=${new Date().getTime()}`, {
                         signal: controller.signal,
+                        cache: 'reload',
                     });
                     clearTimeout(timeoutId);
 
