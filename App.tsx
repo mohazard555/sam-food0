@@ -612,6 +612,7 @@ const App: React.FC = () => {
 
             const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
             const gistId = getGistIdFromUrl(gistUrl);
+            let wasFetchingOldFile = false;
 
             if (gistId) {
                 console.log(`Attempting to fetch latest data from Gist API for ID: ${gistId}`);
@@ -640,18 +641,40 @@ const App: React.FC = () => {
                     
                     if (newSettingsFile && newRecipesFile && newAdsFile) {
                         console.log("Loading data from new multi-file format.");
-                        const [settingsContent, recipesContent, adsContent] = await Promise.all([
-                            fetch(`${newSettingsFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_SETTINGS_FILENAME}`); return res.text(); }),
-                            fetch(`${newRecipesFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_RECIPES_FILENAME}`); return res.text(); }),
-                            fetch(`${newAdsFile.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' }).then(res => { if (!res.ok) throw new Error(`Failed to fetch ${GIST_ADS_FILENAME}`); return res.text(); }),
-                        ]);
+                        const partialFetchErrors: string[] = [];
+                        const fetchOrNull = (file: any, fileName: string): Promise<string | null> => 
+                            fetch(`${file.raw_url}?_=${new Date().getTime()}`, { signal: controller.signal, cache: 'reload' })
+                            .then(res => {
+                                if (!res.ok) throw new Error(`فشل جلب ${fileName}: ${res.statusText}`);
+                                return res.text();
+                            })
+                            .catch(err => {
+                                console.warn(err);
+                                partialFetchErrors.push(fileName.replace('.json', ''));
+                                return null;
+                            });
                         
+                        const [settingsContent, recipesContent, adsContent] = await Promise.all([
+                            fetchOrNull(newSettingsFile, GIST_SETTINGS_FILENAME),
+                            fetchOrNull(newRecipesFile, GIST_RECIPES_FILENAME),
+                            fetchOrNull(newAdsFile, GIST_ADS_FILENAME),
+                        ]);
+
                         settingsFromGist = JSON.parse(settingsContent || '{}');
-                        recipesFromGist = JSON.parse(recipesContent || '[]');
-                        adsFromGist = JSON.parse(adsContent || '[]');
+                        
+                        const cachedRecipes = JSON.parse(localStorage.getItem('recipes') || 'null');
+                        const cachedAds = JSON.parse(localStorage.getItem('ads') || 'null');
+
+                        recipesFromGist = recipesContent ? JSON.parse(recipesContent) : cachedRecipes;
+                        adsFromGist = adsContent ? JSON.parse(adsContent) : cachedAds;
+                        
+                        if (partialFetchErrors.length > 0) {
+                            setFetchError(`فشل تحميل بعض البيانات (${partialFetchErrors.join(', ')}). قد تكون البيانات المعروضة غير محدّثة.`);
+                        }
 
                     } else if (oldDataFile) {
                         console.log("Loading data from old single-file format.");
+                        wasFetchingOldFile = true;
                         const rawUrl = oldDataFile.raw_url;
                         if (!rawUrl) throw new Error("Could not find raw_url for old data file.");
 
@@ -676,14 +699,17 @@ const App: React.FC = () => {
                         gistUrl: gistUrl,
                         githubPat: localSettings?.githubPat || '',
                     };
-
-                    setRecipes(recipesFromGist);
-                    setAds(adsFromGist);
+                    
+                    const finalRecipes = recipesFromGist ?? initialRecipes;
+                    const finalAds = adsFromGist ?? initialAds;
+                    
+                    setRecipes(finalRecipes);
+                    setAds(finalAds);
                     setSettings(newSettings);
 
                     try {
-                        localStorage.setItem('recipes', JSON.stringify(recipesFromGist));
-                        localStorage.setItem('ads', JSON.stringify(adsFromGist));
+                        localStorage.setItem('recipes', JSON.stringify(finalRecipes));
+                        localStorage.setItem('ads', JSON.stringify(finalAds));
                         localStorage.setItem('settings', JSON.stringify(newSettings));
                     } catch(e) {
                         console.warn("Could not save fetched data to local storage.", e);
@@ -693,7 +719,9 @@ const App: React.FC = () => {
                     clearTimeout(timeoutId);
                     console.error("Fetch error:", error);
                     let errorMessage: string;
-                    if (error instanceof Error && error.name === 'AbortError') {
+                    if (wasFetchingOldFile && error instanceof Error && error.name === 'AbortError') {
+                        errorMessage = "فشل تحميل البيانات لأن الملف كبير جداً. إذا كنت مدير الموقع، قم بتسجيل الدخول ثم اذهب إلى الإعدادات واضغط 'حفظ الإعدادات' لترقية نظام المزامنة وحل المشكلة بشكل دائم.";
+                    } else if (error instanceof Error && error.name === 'AbortError') {
                         errorMessage = "انتهت مهلة جلب البيانات. يتم عرض البيانات المحفوظة محلياً.";
                     } else if (error instanceof TypeError && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
                         errorMessage = "حدث خطأ في الشبكة. يرجى التحقق من اتصالك بالإنترنت. يتم عرض البيانات المحفوظة محلياً.";
