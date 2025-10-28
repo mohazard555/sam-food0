@@ -843,6 +843,7 @@ const App: React.FC = () => {
     
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
     const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string | null>(null);
+    const [initialLoadError, setInitialLoadError] = useState<string | null>(null);
 
     // --- TOAST NOTIFICATIONS ---
     const addToast = (message: string, type: ToastMessage['type']) => {
@@ -1039,99 +1040,93 @@ const App: React.FC = () => {
         };
 
         const loadData = async () => {
+            setInitialLoadError(null);
             setIsLoading(true);
+
+            let localRecipes: Recipe[] = [];
             let localSettings: Settings | null = null;
+            let hasLocalData = false;
+
             try {
+                const recipesRaw = localStorage.getItem('recipes');
+                if (recipesRaw) {
+                    localRecipes = JSON.parse(recipesRaw);
+                    if (localRecipes.length > 0) hasLocalData = true;
+                }
                 const settingsRaw = localStorage.getItem('settings');
                 if (settingsRaw) localSettings = JSON.parse(settingsRaw);
-                
-                setRecipes(JSON.parse(localStorage.getItem('recipes') || '[]'));
-                setAds(JSON.parse(localStorage.getItem('ads') || '[]'));
-                setSettings(localSettings ?? initialSettings);
-                setLastSyncTimestamp(localStorage.getItem('dataTimestamp'));
-                
-                console.log("Loaded initial data from local storage.");
             } catch (e) {
-                console.warn("Could not read local storage, starting with empty state.", e);
-                setRecipes([]);
-                setAds([]);
-                setSettings(initialSettings);
+                console.warn("Could not parse local storage, treating as new visitor.", e);
+                hasLocalData = false;
             }
 
             const gistUrl = localSettings?.gistUrl || initialSettings.gistUrl;
-            if (!gistUrl) {
-                console.log("No Gist URL configured. App is in local-only mode.");
-                setSyncStatus('idle');
-                setIsLoading(false);
-                return;
-            }
+            const localPat = localSettings?.githubPat || '';
             
-            const isDirty = localStorage.getItem('dataIsDirty') === 'true';
-            if (isDirty) {
-                setSyncStatus('dirty');
-                console.warn("Local data has unsynced changes. Skipping automatic remote fetch.");
-                addToast("لديك تغييرات محلية لم تتم مزامنتها. قم بالحفظ من الإعدادات لإجراء المزامنة.", 'error');
-                
-                const gistId = getGistIdFromUrl(gistUrl);
-                const localPat = localSettings?.githubPat || '';
-                if (gistId) {
-                    try {
-                         const fetchOptions: RequestInit = { cache: 'reload' };
-                         if (localPat) fetchOptions.headers = { 'Authorization': `token ${localPat}` };
-                         const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
-                         if (gistDetailsResponse.ok) {
-                             const gistData = await gistDetailsResponse.json();
-                             setExistingGistFilenames(Object.keys(gistData.files));
-                         }
-                    } catch (e) {
-                        console.error("Could not pre-fetch gist details while dirty", e);
-                    }
-                }
+            if (hasLocalData) {
+                console.log("Returning user. Loading local data instantly.");
+                setRecipes(localRecipes);
+                setAds(JSON.parse(localStorage.getItem('ads') || '[]'));
+                setSettings(localSettings ?? initialSettings);
+                setLastSyncTimestamp(localStorage.getItem('dataTimestamp'));
                 setIsLoading(false);
-                return;
-            }
 
-            try {
-                const localTimestamp = localStorage.getItem('dataTimestamp');
-                const localPat = localSettings?.githubPat || '';
-                const gistId = getGistIdFromUrl(gistUrl);
-                if (!gistId) {
+                const isDirty = localStorage.getItem('dataIsDirty') === 'true';
+                if (isDirty) {
+                    setSyncStatus('dirty');
+                    return;
+                }
+                if (!gistUrl) {
+                    setSyncStatus('idle');
+                    return;
+                }
+                
+                console.log("Checking for updates in the background...");
+                try {
+                    const localTimestamp = localStorage.getItem('dataTimestamp');
+                    const gistId = getGistIdFromUrl(gistUrl);
+                    if (!gistId) return;
+
+                    const fetchOptions: RequestInit = { cache: 'reload' };
+                    if (localPat) fetchOptions.headers = { 'Authorization': `token ${localPat}` };
+                    const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
+                    if (!gistDetailsResponse.ok) throw new Error('Failed to fetch gist details for update check.');
+
+                    const gistData = await gistDetailsResponse.json();
+                    const remoteTimestamp = gistData.updated_at;
+
+                    if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
+                        console.log("Updates found. Applying now.");
+                        await fetchAndApplyGistData(gistUrl, localPat);
+                        addToast('تم تحديث البيانات بنجاح!', 'success');
+                        setSyncStatus('synced');
+                    } else {
+                        console.log("Local data is up-to-date.");
+                        setExistingGistFilenames(Object.keys(gistData.files || {}));
+                        setSyncStatus('synced');
+                    }
+                } catch (error) {
+                    console.error("Background update check failed:", error);
                     setSyncStatus('error');
-                    addToast("الرابط Gist المحدد في الإعدادات غير صالح.", 'error');
+                    addToast('فشل التحقق من وجود تحديثات.', 'error');
+                }
+            } else {
+                console.log("New visitor. Performing initial data fetch.");
+                if (!gistUrl) {
+                    console.log("No Gist URL configured. App will start empty.");
                     setIsLoading(false);
                     return;
                 }
                 
-                const fetchOptions: RequestInit = { cache: 'reload' };
-                if (localPat) fetchOptions.headers = { 'Authorization': `token ${localPat}` };
-
-                const gistDetailsResponse = await fetch(`https://api.github.com/gists/${gistId}?_=${new Date().getTime()}`, fetchOptions);
-                if (!gistDetailsResponse.ok) throw new Error(`فشل في جلب تفاصيل Gist: ${gistDetailsResponse.statusText}`);
-                
-                const gistData = await gistDetailsResponse.json();
-                const remoteTimestamp = gistData.updated_at;
-
-                if (remoteTimestamp && (!localTimestamp || new Date(remoteTimestamp) > new Date(localTimestamp))) {
-                    console.log("Remote data is newer. Fetching Gist content...");
+                try {
                     await fetchAndApplyGistData(gistUrl, localPat);
                     setSyncStatus('synced');
-                } else {
-                    console.log("Local data is already up-to-date with remote.");
-                    setExistingGistFilenames(Object.keys(gistData.files || {}));
-                    setSyncStatus('synced');
+                    setIsLoading(false);
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : "حدث خطأ غير معروف";
+                    console.error("Initial data fetch failed:", error);
+                    setInitialLoadError(message);
                 }
-
-            } catch (error) {
-                setSyncStatus('error');
-                let errorMessage = "فشل تحميل البيانات من الرابط.";
-                if (error instanceof Error) {
-                    if (error.message.includes('Failed to fetch')) errorMessage = "حدث خطأ في الشبكة.";
-                    else errorMessage = error.message;
-                }
-                addToast(`${errorMessage} سيتم عرض البيانات المحفوظة محليًا.`, 'error');
-                console.error("Remote data loading error:", error);
-            } finally {
-                setIsLoading(false);
             }
         };
 
@@ -1309,7 +1304,31 @@ const App: React.FC = () => {
 
     const renderView = () => {
         if (isLoading) {
-            return <div className="text-center py-20 text-gray-500">جاري تحميل البيانات...</div>;
+            if (initialLoadError) {
+                return (
+                    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col items-center justify-center text-center" style={{ minHeight: 'calc(100vh - 100px)' }}>
+                        <ExclamationTriangleIcon className="w-16 h-16 text-red-500 mb-4" />
+                        <h2 className="text-2xl font-bold text-gray-800 mb-2">حدث خطأ في الاتصال</h2>
+                        <p className="text-gray-600 max-w-md mb-6">
+                            تعذر جلب البيانات من المصدر. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.
+                            <br />
+                            <span className="text-xs text-gray-400 mt-2 block">تفاصيل الخطأ: {initialLoadError}</span>
+                        </p>
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="px-6 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors"
+                        >
+                            إعادة المحاولة
+                        </button>
+                    </div>
+                );
+            }
+            return (
+                <div className="flex flex-col items-center justify-center" style={{ minHeight: 'calc(100vh - 100px)' }}>
+                    <SpinnerIcon className="w-12 h-12 text-orange-600" />
+                    <p className="text-gray-500 mt-4 text-lg">جاري جلب أحدث الوصفات...</p>
+                </div>
+            );
         }
 
         switch (view) {
